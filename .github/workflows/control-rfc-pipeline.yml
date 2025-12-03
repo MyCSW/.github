@@ -1,0 +1,2029 @@
+name: RFC Controller
+
+on:
+  issues:
+    types: [opened, edited, labeled, closed, deleted]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, edited, synchronize, closed]
+
+concurrency:
+  group: rfc-${{ github.event.issue.number }}-${{ github.event.action }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+  repository-projects: write
+  pull-requests: read
+
+env:
+  PROJECT_URL: https://github.com/users/ErickGuerron/projects/1
+  ORG_LOGIN: MyCSW
+  USER_LOGIN: ErickGuerron
+  PROJECT_NUMBER: 1
+  PROJECT_TITLE: Formularios-control-cambios
+  PROJECT_NUMBER_USER: 3
+  PROJECT_TITLE_USER: Formularios-Usuarios
+
+jobs:
+  # --- Job: process_rfc_on_github (Sin cambios) ---
+  process_rfc_on_github:
+    if: |
+      github.event_name == 'issues' &&
+      (github.event.action == 'opened' || github.event.action == 'edited')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add labels, Add to Project, and Map Fields
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const body = issue.body || '';
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+
+            function escRE(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+            const grab = (label) => {
+              const L = escRE(label);
+              const variants = [
+                new RegExp(`^###\\s*${L}\\s*\\n+([\\s\\S]*?)(?=\\n###|\\n$|$)`, 'im'),
+                new RegExp(`\\*\\*${L}\\*\\*[\\s\\r\\n]+([\\s\\S]*?)(?=\\n\\*\\*|\\n###|\\n$|$)`, 'i'),
+                new RegExp(`^${L}\\s*:\\s*(.+)$`, 'im')
+              ];
+              for (const re of variants){ const m = body.match(re); if(m) return m[1].trim() }
+              return '';
+            }
+
+            const tipo   = (grab('Tipo de cambio') || '').toLowerCase();
+            const riesgo = (grab('Riesgo') || '').toLowerCase();
+
+            const wanted = new Set(['rfc']);
+            if (tipo.includes('estándar') || tipo.includes('estandar')) wanted.add('tipo:estandar');
+            if (tipo.includes('normal'))                                wanted.add('tipo:normal');
+            if (tipo.includes('emergencia') || tipo.includes('urgente')) wanted.add('tipo:emergencia');
+            if (riesgo.includes('bajo'))  wanted.add('riesgo:bajo');
+            if (riesgo.includes('medio')) wanted.add('riesgo:medio');
+            if (riesgo.includes('alto'))  wanted.add('riesgo:alto');
+
+            const current = new Set((issue.labels || []).map(l => l.name));
+            const toAdd = [...wanted].filter(l => !current.has(l));
+            if (toAdd.length) {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: toAdd });
+            }
+
+            const hasUserLabel = (issue.labels || []).some(l => norm(l.name) === 'user');
+
+            const ORG_LOGIN = process.env.ORG_LOGIN;
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const PROJECT_NUMBER = parseInt(process.env.PROJECT_NUMBER || '0', 10);
+            const PROJECT_TITLE  = process.env.PROJECT_TITLE || '';
+            const PROJECT_NUMBER_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+            const PROJECT_TITLE_USER  = process.env.PROJECT_TITLE_USER || '';
+            const PROJECT_URL = process.env.PROJECT_URL || '';
+
+            async function resolveFromUrl(url){
+              const mu = url.match(/https:\/\/github\.com\/users\/([^/]+)\/projects\/(\d+)/i);
+              if (mu) {
+                const login = mu[1], num = parseInt(mu[2],10);
+                const r = await github.graphql(
+                  `query($login:String!){
+                    user(login:$login){ projectsV2(first:100){ nodes{ id number title } } }
+                  }`, { login }
+                ).catch(()=>null);
+                const hit = r?.user?.projectsV2?.nodes?.find(n=>n.number===num);
+                if (hit) return hit.id;
+              }
+              return null;
+            }
+            async function resolveByUser(numberOrTitle){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:100){ nodes{ id number title } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              const nodes = r?.user?.projectsV2?.nodes || [];
+              if (typeof numberOrTitle === 'number' && numberOrTitle > 0) return nodes.find(n=>n.number===numberOrTitle)?.id || null;
+              if (typeof numberOrTitle === 'string' && numberOrTitle)     return nodes.find(n=>n.title===numberOrTitle)?.id  || null;
+              return null;
+            }
+            async function resolveByOrg(numberOrTitle){
+              if (!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){
+                  organization(login:$login){ projectsV2(first:100){ nodes{ id number title } } }
+                }`, { login: ORG_LOGIN }
+              ).catch(()=>null);
+              const nodes = r?.organization?.projectsV2?.nodes || [];
+              if (typeof numberOrTitle === 'number' && numberOrTitle > 0) return nodes.find(n=>n.number===numberOrTitle)?.id || null;
+              if (typeof numberOrTitle === 'string' && numberOrTitle)     return nodes.find(n=>n.title===numberOrTitle)?.id  || null;
+              return null;
+            }
+            async function findProjectV2Main() {
+              let id = await resolveFromUrl(PROJECT_URL);
+              if (!id) id = await resolveByUser(PROJECT_NUMBER) || await resolveByUser(PROJECT_TITLE);
+              if (!id) id = await resolveByOrg(PROJECT_NUMBER)  || await resolveByOrg(PROJECT_TITLE);
+              return id;
+            }
+            async function findProjectV2User() {
+              return await resolveByUser(PROJECT_NUMBER_USER) || await resolveByUser(PROJECT_TITLE_USER);
+            }
+
+            const issueRes = await github.graphql(
+              `query($owner:String!, $name:String!, $n:Int!){
+                repository(owner:$owner, name:$name){ issue(number:$n){ id number } }
+              }`, { owner, name: repo, n: issue.number }
+            );
+            const issueId = issueRes.repository.issue.id;
+
+            async function ensureItem(projectId){
+              const srch = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issue.number) }
+              );
+              let it = srch?.node?.items?.nodes?.find(n=>n.content?.number===issue.number);
+              if (it) return it.id;
+              const add = await github.graphql(
+                `mutation($projectId:ID!, $contentId:ID!){
+                  addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){ item { id } }
+                }`, { projectId, contentId: issueId }
+              ).catch(()=>null);
+              return add?.addProjectV2ItemById?.item?.id || null;
+            }
+
+            async function getFields(projectId){
+              const r = await github.graphql(
+                `query($projectId:ID!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    fields(first:100){ nodes{
+                      ... on ProjectV2FieldCommon { id name dataType }
+                      ... on ProjectV2SingleSelectField { id name options { id name } }
+                    } }
+                  } }
+                }`, { projectId }
+              ).catch(()=>null);
+              return r?.node?.fields?.nodes || [];
+            }
+
+            const setSelect = async(projectId,itemId,field,optName)=>{
+              if(!projectId || !itemId || !field || !optName) return;
+              const opts = field.options || [];
+              const opt = opts.find(o=>norm(o.name)===norm(optName)) || opts.find(o=>norm(o.name).includes(norm(optName)));
+              if(!opt) {
+                console.log(`Opción "${optName}" no encontrada en el campo "${field?.name}"`);
+                return;
+              }
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: field.id, opt: opt.id }
+              ).catch(()=>null);
+            }
+            const setText = async(projectId,itemId,fieldId,val)=>{
+              if(!projectId || !itemId || !fieldId) return;  
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ text:$val } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: fieldId, val: val || "" }
+              ).catch(()=>null);
+            }
+            const setDate = async(projectId,itemId,fieldId,ymd)=>{
+              if(!projectId || !itemId || !fieldId || !ymd) return;
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:Date!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ date:$val } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: fieldId, val: ymd }
+              ).catch(()=>null);
+            }
+
+            if (hasUserLabel) {
+              const projectIdUser = await findProjectV2User();
+              if (!projectIdUser) { console.log('Project usuarios no encontrado o sin permisos'); return }
+              const itemIdUser = await ensureItem(projectIdUser);
+              if (!itemIdUser) { console.log('No se pudo crear/encontrar item en Project usuarios'); return }
+
+              const fieldsUser = await getFields(projectIdUser);
+              const byU = (names) => {
+                const want = names.map(n => norm(n));
+                return fieldsUser.find(f => {
+                  const fn = norm(f?.name);
+                  return want.some(w => fn === w || fn.includes(w));
+                });
+              }
+
+              const fStatusU    = byU(['Status']);
+              const fStatusCccU = byU(['Status_CCC','Status CCC','status_ccc']);
+              const fReasonU    = byU(['Reason for change','Motivo de cambio']); // Campo de Select
+              const fRiskU      = byU(['Risk','Riesgo']);
+              const fSolicU     = byU(['Solicitor']);
+              const fDeptU      = byU(['Department','Área / Departamento','Area / Departamento']);
+              const fEmailU     = byU(['Contact Email']);
+              const fDateAppU   = byU(['Date of application']);
+              const fDescU      = byU(['Description of the requested change','Description of the request','Descripción del cambio solicitado']);
+              const fExplU      = byU(['Explanation of the reason for the change','Explanation of the reason','Motivo del cambio']);
+              const fNotesU     = byU(['Additional comments','Observaciones adicionales']);
+
+              // --- INICIO DE CAMBIOS ---
+              
+              // 1. Obtener valores del body
+              const vDept   = grab('Área / Departamento') || grab('Department');
+              const vReason = grab('Motivo de cambio'); // "Mejora funcional"
+              const vPrior  = grab('Prioridad') || grab('priorityname') || grab('Priority') || '';
+              let   vDesc   = grab('Descripción del cambio solicitado *') || grab('Descripción del cambio solicitado') || grab('Description of the requested change') || grab('Description of the request');
+              let   vExpl   = grab('Motivo del cambio *') || grab('Motivo del cambio') || grab('Explanation of the reason for the change') || grab('Explanation of the reason');
+              const vNotes  = grab('Observaciones adicionales') || grab('Additional comments');
+              const vEmail  = grab('Email') || grab('Contact Email'); // <-- ¡NUEVO!
+
+              if(!vDesc) vDesc = (grab('Descripción del cambio') || '').trim();
+              if(!vExpl) vExpl = (grab('Explicación del motivo') || '').trim();
+
+              const authorLogin = issue.user?.login || context.actor;
+              const authorInfo  = await github.graphql(
+                `query($login:String!){ user(login:$login){ name } }`, // Ya no pedimos email
+                { login: authorLogin }
+              ).catch(()=>null);
+              const authorName  = (authorInfo?.user?.name || authorLogin).trim();
+              
+              // 2. Función de Traducción para el "Reason for change"
+              function translateReason(reason) {
+                const r = norm(reason);
+                if (r.includes('corrección') || r.includes('error')) return 'Error Correction'; // Asume que esta es tu opción en inglés
+                if (r.includes('mejora funcional')) return 'Functional Improvement';
+                if (r.includes('estético')) return 'Cosmetic Change';
+                if (r.includes('otro')) return 'Other';
+                return r; // Fallback
+              }
+              const translatedReason = translateReason(vReason);
+
+              // 3. Función de mapeo para "Risk" (basado en Prioridad)
+              function pickRiskFromPriority(priority, riskField){
+                const opts = (riskField?.options || []).map(o => o.name);
+                const names = opts.map(n => norm(n));
+                const high  = opts[names.findIndex(n => /high|alto/.test(n))]   ?? opts.find(o=>/high|alto/i.test(o))   ?? 'High';
+                const med   = opts[names.findIndex(n => /medium|medio/.test(n))]?? opts.find(o=>/medium|medio/i.test(o))?? 'Medium';
+                const low   = opts[names.findIndex(n => /low|bajo/.test(n))]   ?? opts.find(o=>/low|bajo/i.test(o))   ?? 'Low';
+                const v = norm(priority);
+                if (/(crit|urg|alta|alto|high)/.test(v))   return high;
+                if (/(med|medio|media|medium|normal)/.test(v)) return med;
+                if (/(baj|baja|low)/.test(v))              return low;
+                return med;
+              }
+
+              // 4. Setear Status (solo al crear)
+              if (context.payload.action === 'opened') {
+                // El issue ya se crea como 'closed', el Action lo re-abre
+                // y lo pone en 'Backlog' y 'Inbox'.
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'open',
+                });
+                await setSelect(projectIdUser, itemIdUser, fStatusU, 'Backlog');
+                await setSelect(projectIdUser, itemIdUser, fStatusCccU, 'Inbox');
+              }
+
+              // 5. Aplicar todos los valores al proyecto
+              await setText (projectIdUser, itemIdUser, fSolicU?.id,   authorName);
+              await setText (projectIdUser, itemIdUser, fEmailU?.id,   vEmail); // <-- ¡CAMBIADO!
+              await setDate (projectIdUser, itemIdUser, fDateAppU?.id, new Date().toISOString().slice(0,10));
+              await setSelect(projectIdUser, itemIdUser, fReasonU,    translatedReason); // <-- ¡CAMBIADO!
+              await setSelect(projectIdUser, itemIdUser, fRiskU,      pickRiskFromPriority(vPrior, fRiskU));
+              await setText (projectIdUser, itemIdUser, fDeptU?.id,    vDept);
+              await setText (projectIdUser, itemIdUser, fDescU?.id,    vDesc);
+              await setText (projectIdUser, itemIdUser, fExplU?.id,    vExpl);
+              await setText (projectIdUser, itemIdUser, fNotesU?.id,   vNotes);
+              
+              // --- FIN DE CAMBIOS ---
+              return;
+            }
+            
+            // ... (El resto del script para RFCs 'no-user' no cambia) ...
+            
+            const projectIdMain = await findProjectV2Main();
+            if (!projectIdMain) { console.log('Project principal no encontrado o sin permisos'); return }
+            const itemIdMain = await ensureItem(projectIdMain);
+            if (!itemIdMain) { console.log('No se pudo crear/encontrar item en Project principal'); return }
+            const fieldsMain = await getFields(projectIdMain);
+            const byM = (names)=> names.map(n=>fieldsMain.find(f=>norm(f?.name)===norm(n))).find(Boolean);
+
+            const fStatusM   = byM(['Status','Estado']);
+            const fStatusCccM= byM(['Status_CCC','Status CCC','status_ccc']);
+            const fTipoM     = byM(['Change Type','Tipo de cambio']);
+            const fRiesgoM   = byM(['Risk','Riesgo']);
+            const fImpactoM  = byM(['Impact','Impacto']);
+            const fPlanM     = byM(['Implementation Plan','Plan de implementación']);
+            const fRollbackM = byM(['RollBack Planning','Rollback Plan','Plan de reversa (rollback)']);
+            const fPruebasM  = byM(['Test Planning','Plan de pruebas']);
+            const fAprobM    = byM(['Approvers','Aprobadores requeridos']);
+            const fSolicM    = byM(['Solicitante','Solicitor','Applicant','Requester']);
+
+            if (context.payload.action === 'opened') {
+              // El issue ya se crea como 'closed', el Action lo re-abre
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'open',
+              });
+              await setSelect(projectIdMain, itemIdMain, fStatusM, 'Backlog');
+              await setSelect(projectIdMain, itemIdMain, fStatusCccM, 'Inbox');
+            }
+            await setSelect(projectIdMain, itemIdMain, fTipoM,   tipo);
+            await setSelect(projectIdMain, itemIdMain, fRiesgoM, riesgo);
+            await setText  (projectIdMain, itemIdMain, fImpactoM?.id, grab('Impacto') || grab('Impact'));
+            await setText  (projectIdMain, itemIdMain, fPlanM?.id,    grab('Plan de implementación') || grab('Implementation Plan'));
+            await setText  (projectIdMain, itemIdMain, fRollbackM?.id,grab('Plan de reversa \\(rollback\\)') || grab('RollBack Planning') || grab('Rollback Plan'));
+            await setText  (projectIdMain, itemIdMain, fPruebasM?.id, grab('Plan de pruebas') || grab('Test Planning'));
+            await setText  (projectIdMain, itemIdMain, fAprobM?.id,   grab('Aprobadores requeridos') || grab('Approvers'));
+            await setText  (projectIdMain, itemIdMain, fSolicM?.id,   grab('Solicitante') || grab('Solicitor') || grab('Applicant') || grab('Requester'));
+
+  # --- Job: process-user-approval (Solo para 'user') ---
+  process-user-approval:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'approved' ||
+        github.event.label.name == 'Approved' ||
+        github.event.label.name == 'aprobado' ||
+        github.event.label.name == 'Aprobado') &&
+      contains(github.event.issue.labels.*.name, 'user')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        id: check_fields
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            const hasUser = (issue.labels || []).some(l => norm(l.name)==='user');
+            if (!hasUser) {
+              console.log('Issue no tiene label "user". Saltando.');
+              return;
+            }
+
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER||'0',10);
+            const userProjUrl = `https://github.com/users/${USER_LOGIN}/projects/${PN_USER}`;
+
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            async function findItemId(projectId, issueNumber){
+              const r = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issueNumber) }
+              );
+              return r.node.items.nodes.find(n=>n.content?.number===issueNumber)?.id || null;
+            }
+            async function getFields(projectId){
+              const r = await github.graphql(
+                `query($projectId:ID!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    fields(first:100){ nodes{
+                      ... on ProjectV2FieldCommon { id name dataType }
+                      ... on ProjectV2SingleSelectField { id name options { id name } }
+                    } }
+                  } }
+                }`, { projectId }
+              );
+              return r.node.fields.nodes;
+            }
+            async function getFieldValues(itemId){
+              const r = await github.graphql(
+                `query($itemId:ID!){
+                  node(id:$itemId){
+                    ... on ProjectV2Item {
+                      fieldValues(first:100){
+                        nodes{
+                          ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { id name } } }
+                          ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { id name } } }
+                          ... on ProjectV2ItemFieldSingleSelectValue { name optionId field { ... on ProjectV2FieldCommon { id name } } }
+                        }
+                      }
+                    }
+                  }
+                }`, { itemId }
+              );
+              return r.node.fieldValues.nodes;
+            }
+            const by = (fields, names) => names.map(n=>fields.find(f=>norm(f?.name)===norm(n))).find(Boolean);
+
+            const projectId = await getUserProjByNum(PN_USER);
+            if(!projectId) {
+              console.log('Proyecto de usuario no encontrado.');
+              return;
+            }
+            const itemId = await findItemId(projectId, issue.number);
+            if(!itemId) {
+              console.log('Item no encontrado en el proyecto.');
+              return;
+            }
+
+            const fields = await getFields(projectId);
+            const fStatusCcc = by(fields, ['Status_CCC','Status CCC','status_ccc']);
+            const fChangeType= by(fields, ['Change Type', 'Tipo de cambio']);
+            const fImpact    = by(fields, ['Impact']);
+            const fPlan      = by(fields, ['Implementation Plan']);
+            const fRollback  = by(fields, ['RollBack Planning','Rollback Plan']);
+            const fPruebas   = by(fields, ['Test Planning']);
+            const fAprob     = by(fields, ['Approvers']);
+            const fStart     = by(fields, ['Start date']);
+            const fTarget    = by(fields, ['Target date']);
+
+            const values = await getFieldValues(itemId);
+            function getValue(field){
+              if(!field) return null;
+              const v = values.find(n => norm(n.field?.name) === norm(field.name));
+              if(!v) return null;
+              if ('text' in v) return (v.text||'').trim();
+              if ('date' in v) return (v.date||'').trim();
+              if ('name' in v) return (v.name||'').trim();
+              return null;
+            }
+
+            const missing = [];
+            if(!getValue(fChangeType)) missing.push('Change Type (estandar/normal/emergencia)');
+            if(!getValue(fImpact))   missing.push('Impact');
+            if(!getValue(fPlan))     missing.push('Implementation Plan');
+            if(!getValue(fRollback)) missing.push('RollBack Planning');
+            if(!getValue(fPruebas))  missing.push('Test Planning');
+            if(!getValue(fAprob))    missing.push('Approvers');
+            if(!getValue(fStart))    missing.push('Start date (YYYY-MM-DD)');
+            if(!getValue(fTarget))   missing.push('Target date (YYYY-MM-DD)');
+
+            core.setOutput('has_missing_fields', missing.length > 0 ? 'true' : 'false');
+            core.setOutput('missing_fields', JSON.stringify(missing));
+            core.setOutput('project_id', projectId);
+            core.setOutput('item_id', itemId);
+            core.setOutput('project_url', userProjUrl);
+
+      - name: Add CCC Form if Missing Fields
+        if: steps.check_fields.outputs.has_missing_fields == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const missing = JSON.parse('${{ steps.check_fields.outputs.missing_fields }}');
+            const projectUrl = '${{ steps.check_fields.outputs.project_url }}';
+            
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number
+            });
+            
+            const hasForm = comments.data.some(c => c.body.includes(''));
+            
+            if (hasForm) {
+              console.log('El formulario CCC ya existe');
+              return;
+            }
+            
+            const list = missing.map(m => `- [ ] \`${m}\``).join('\n');
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `## 📋 Formulario de Control de Cambios (CCC)
+
+            > ⚠️ **Aprobación pendiente - Información requerida**
+            > 
+            > Para completar la aprobación, necesitas llenar los siguientes campos **directamente en el proyecto**.
+
+            ---
+
+            ### ❌ Campos faltantes en el proyecto:
+
+            ${list}
+
+            ---
+
+            ### 📝 Cómo completar la información
+
+            **Opción 1: Llenar en el proyecto (Recomendado)**
+
+            1. **[Haz clic aquí para ir al Proyecto →](${projectUrl})**
+            2. Busca esta tarjeta (Issue #${issue.number})
+            3. Llena los campos indicados arriba haciendo clic en cada celda
+            4. Vuelve a este issue y **comenta** \`/verificar\` para validar
+
+            **Opción 2: Responder en este issue**
+
+            También puedes completar la información directamente aquí. Copia y llena la siguiente plantilla:
+
+            <details>
+            <summary><b>📋 Plantilla de información CCC</b> (Click para expandir)</summary>
+
+            \`\`\`
+            ### Change Type
+            Tipo de cambio: [ ] estandar [ ] normal [ ] emergencia
+
+            ### Impact
+            Describe el impacto del cambio:
+            - Usuarios afectados: 
+            - Sistemas impactados: 
+            - Nivel de criticidad: [ ] Bajo [ ] Medio [ ] Alto
+
+            ### Implementation Plan
+            Pasos detallados de implementación:
+            1. 
+            2. 
+            3. 
+
+            Recursos necesarios:
+            - Personal: @
+            - Tiempo estimado: ___ horas
+            - Ventana de mantenimiento: [ ] Sí [ ] No
+
+            ### RollBack Planning
+            Procedimiento de rollback:
+            1. 
+            2. 
+            3. 
+
+            Tiempo estimado de rollback: ___ minutos
+            ¿Es completamente reversible? [ ] Sí [ ] No
+
+            ### Test Planning
+            Estrategia de testing:
+            - Tests unitarios: [ ] Completos
+            - Tests de integración: [ ] Completos
+            - Tests E2E: [ ] Completos
+
+            Casos de prueba críticos:
+            1. 
+            2. 
+
+            ### Approvers
+            Aprobadores requeridos:
+            - [ ] Tech Lead: @
+            - [ ] Product Owner: @
+            - [ ] DevOps: @
+            - [ ] Otro: @
+
+            ### Start date
+            Fecha de inicio (YYYY-MM-DD): 
+
+            ### Target date
+            Fecha objetivo (YYYY-MM-DD): 
+            \`\`\`
+
+            **Una vez completado**, comenta: \`/actualizar\` para sincronizar con el proyecto
+
+            </details>
+
+            ---
+
+            ### ✅ Comandos disponibles
+
+            - \`/verificar\` - Verificar si ya se completaron los campos en el proyecto
+            - \`/actualizar\` - Actualizar el proyecto con la información de este issue
+            - \`/ayuda\` - Mostrar ayuda sobre cómo llenar cada campo
+
+            ---
+
+            _🤖 Este formulario fue generado automáticamente. La etiqueta "approved" se removió temporalmente hasta completar la información._
+            `
+                        });
+
+      - name: Revert Status and Remove Label
+        if: steps.check_fields.outputs.has_missing_fields == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const projectId = '${{ steps.check_fields.outputs.project_id }}';
+            const itemId = '${{ steps.check_fields.outputs.item_id }}';
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const fields = await github.graphql(
+              `query($projectId:ID!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  fields(first:50){ nodes{
+                    ... on ProjectV2FieldCommon { id name }
+                    ... on ProjectV2SingleSelectField { id name options{ id name } }
+                  } }
+                } }
+              }`, { projectId }
+            );
+            
+            const fStatusCcc = fields.node.fields.nodes.find(f => {
+              const fn = norm(f?.name);
+              return fn === 'status_ccc' || fn === 'status ccc' || fn.includes('status_ccc');
+            });
+            
+            if (fStatusCcc) {
+              const opts = fStatusCcc.options || [];
+              const inbox = opts.find(o => norm(o.name) === 'inbox') || opts.find(o => norm(o.name).includes('inbox'));
+              
+              if (inbox) {
+                await github.graphql(
+                  `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                    updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                  }`, { projectId, itemId, fieldId: fStatusCcc.id, opt: inbox.id }
+                );
+              }
+            }
+            
+            try {
+              const labelName = context.payload.label.name;
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                name: labelName
+              });
+            } catch(e) {
+              console.log('No se pudo remover el label:', e.message);
+            }
+
+      - name: Approve if Complete
+        if: steps.check_fields.outputs.has_missing_fields == 'false'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const projectId = '${{ steps.check_fields.outputs.project_id }}';
+            const itemId = '${{ steps.check_fields.outputs.item_id }}';
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+
+            async function setSelect(field,optName){
+              if(!field || !optName) return false;
+              const opts = field.options || [];
+              const normalizedOptName = norm(optName);
+              const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+              if(!wanted) {
+                console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
+                return false;
+              }
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: field.id, opt: wanted.id }
+              );
+              return true;
+            }
+
+            const fields = await github.graphql(
+              `query($projectId:ID!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  fields(first:50){ nodes{
+                    ... on ProjectV2FieldCommon { id name }
+                    ... on ProjectV2SingleSelectField { id name options{ id name } }
+                  } }
+                } }
+              }`, { projectId }
+            );
+            
+            const allFields = fields.node.fields.nodes;
+            
+            const fStatusCcc = allFields.find(f => {
+              const fn = norm(f?.name);
+              return fn === 'status_ccc' || fn === 'status ccc' || fn.includes('status_ccc');
+            });
+            
+            const fStatus = allFields.find(f => norm(f?.name) === 'status');
+            
+            await setSelect(fStatusCcc, 'Approved');
+            await setSelect(fStatus, 'Ready');
+            
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                name: 'denied'
+              });
+            } catch(e) {}
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `## ✅ Aprobación Completada
+
+            Todos los campos requeridos están completos. El cambio ha sido aprobado exitosamente.
+
+            **Estado actualizado:** Ready
+            **Estado CCC:** Approved
+            **Fecha:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}
+
+            Puedes proceder con la implementación según el plan establecido.`
+                        });
+
+  # --- Job: process-rfc-approval (Solo para 'rfc' sin 'user') ---
+  process-rfc-approval:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'approved' ||
+        github.event.label.name == 'Approved' ||
+        github.event.label.name == 'aprobado' ||
+        github.event.label.name == 'Aprobado') &&
+      contains(github.event.issue.labels.*.name, 'rfc') &&
+      !contains(github.event.issue.labels.*.name, 'user')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Status to Ready and Approved
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+            
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+
+            async function getOrgProjByNum(n){
+              if(!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){ organization(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            
+            async function findItemId(projectId, issueNumber){
+              const r = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issueNumber) }
+              );
+              return r?.node?.items?.nodes?.find(n=>n.content?.number===issueNumber)?.id || null;
+            }
+
+            async function setSelect(projectId, itemId, field, optName){
+              if(!field || !optName) return false;
+              const opts = field.options || [];
+              const normalizedOptName = norm(optName);
+              const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+              if(!wanted) {
+                console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
+                return false;
+              }
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: field.id, opt: wanted.id }
+              );
+              return true;
+            }
+            
+            const projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+            if (!projectId) {
+              console.log('Proyecto principal no encontrado.');
+              return;
+            }
+            
+            const itemId = await findItemId(projectId, issue.number);
+            if (!itemId) {
+              console.log('Item no encontrado en el proyecto principal.');
+              return;
+            }
+            
+            if (issue.state === 'closed') {
+              console.log('El issue estaba cerrado. Reabriendo.');
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'open'
+              });
+            }
+
+            const fields = await github.graphql(
+              `query($projectId:ID!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  fields(first:50){ nodes{
+                    ... on ProjectV2FieldCommon { id name }
+                    ... on ProjectV2SingleSelectField { id name options{ id name } }
+                  } }
+                } }
+              }`, { projectId }
+            );
+            
+            const allFields = fields.node.fields.nodes;
+            const fStatusCcc = allFields.find(f => norm(f?.name) === 'status_ccc');
+            const fStatus = allFields.find(f => norm(f?.name) === 'status');
+            
+            await setSelect(projectId, itemId, fStatusCcc, 'Approved');
+            await setSelect(projectId, itemId, fStatus, 'Ready');
+            
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                name: 'denied'
+              });
+            } catch(e) {}
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `## ✅ RFC Aprobado
+
+            El RFC ha sido aprobado.
+
+            **Estado actualizado:** Ready
+            **Estado CCC:** Approved
+            **Fecha:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
+                        });
+
+  # --- Job: process-denial (ACTUALIZADO para 'rfc' y 'user') ---
+  process-denial:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'denied' ||
+       github.event.label.name == 'Denegado' ||
+       github.event.label.name == 'denegado')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Status to Not Planned and Denied
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const hasRfc = (issue.labels || []).some(l => norm(l.name) === 'rfc');
+            if (!hasRfc) {
+              console.log('No es un issue RFC, saltando.');
+              return;
+            }
+
+            const hasUser = (issue.labels || []).some(l => norm(l.name) === 'user');
+            
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+            const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+            
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            
+            async function getOrgProjByNum(n){
+              if(!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){ organization(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+
+            async function findItemId(projectId, issueNumber){
+              const r = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issueNumber) }
+              );
+              return r?.node?.items?.nodes?.find(n=>n.content?.number===issueNumber)?.id || null;
+            }
+            
+            let projectId = null;
+            if (hasUser) {
+              projectId = await getUserProjByNum(PN_USER);
+            } else {
+              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+            }
+
+            if (!projectId) {
+              console.log('Proyecto (user o main) no encontrado.');
+              return;
+            }
+            
+            const itemId = await findItemId(projectId, issue.number);
+            if (!itemId) {
+              console.log('Item no encontrado en el proyecto.');
+              return;
+            }
+
+            if (issue.state === 'open') {
+              console.log('El issue está abierto. Cerrando como "not_planned".');
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'not_planned'
+              });
+            }
+
+            async function setSelect(field,optName){
+              if(!field || !optName) return false;
+              const opts = field.options || [];
+              const normalizedOptName = norm(optName);
+              const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+              if(!wanted) {
+                console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
+                return false;
+              }
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: field.id, opt: wanted.id }
+              );
+              return true;
+            }
+
+            const fields = await github.graphql(
+              `query($projectId:ID!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  fields(first:50){ nodes{
+                    ... on ProjectV2FieldCommon { id name }
+                    ... on ProjectV2SingleSelectField { id name options{ id name } }
+                  } }
+                } }
+              }`, { projectId }
+            );
+            
+            const allFields = fields.node.fields.nodes;
+            
+            const fStatusCcc = allFields.find(f => {
+              const fn = norm(f?.name);
+              return fn === 'status_ccc' || fn === 'status ccc' || fn.includes('status_ccc');
+            });
+            
+            const fStatus = allFields.find(f => norm(f?.name) === 'status');
+            
+            await setSelect(fStatusCcc, 'Denied');
+            await setSelect(fStatus, 'Not Planned');
+            
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.issue.number,
+                name: 'approved'
+              });
+            } catch(e) {}
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: `## ❌ Solicitud Denegada
+
+              El issue ha sido marcado como denegado y cerrado.
+
+              **Estado actualizado:** Not Planned
+              **Estado CCC:** Denied`
+                          });
+
+  # --- Job: process-pr-link (ACTUALIZADO para bloquear PRs) ---
+  process-pr-link:
+    if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'edited' || github.event.action == 'synchronize') && github.base_ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR for RFC Process
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const pr = context.payload.pull_request;
+            const prBody = pr.body || '';
+            const prTitle = pr.title || '';
+            const prNumber = pr.number;
+            const content = prBody + ' ' + prTitle;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const allIssuesRegex = /#(\d+)/gi;
+            const closingRegex = /(?:closes|fixes|resolves) #(\d+)/gi;
+            
+            let match;
+            const allIssueNumbers = new Set();
+            const closingNumbers = new Set();
+            
+            while ((match = allIssuesRegex.exec(content)) !== null) {
+              allIssueNumbers.add(match[1]);
+            }
+            while ((match = closingRegex.exec(content)) !== null) {
+              closingNumbers.add(match[1]);
+            }
+            
+            if (allIssueNumbers.size === 0) {
+              console.log('PR no linkea a ningun issue. Pasando.');
+              return; // Es un PR sin issues, es válido (ej. un typo)
+            }
+            
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+            const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER||'0',10);
+            
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+
+            async function getOrgProjByNum(n){
+              if(!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){ organization(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            
+            async function findItemId(projectId, issueNumber){
+              const r = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issueNumber) }
+              );
+              return r?.node?.items?.nodes?.find(n=>n.content?.number===parseInt(issueNumber,10))?.id || null;
+            }
+
+            async function getFields(projectId){
+              const r = await github.graphql(
+                `query($projectId:ID!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    fields(first:50){ nodes{
+                      ... on ProjectV2FieldCommon { id name }
+                      ... on ProjectV2SingleSelectField { id name options{ id name } }
+                    } }
+                  } }
+                }`, { projectId }
+              );
+              return r?.node?.fields?.nodes || [];
+            }
+
+            async function setSelect(projectId, itemId, field, optName){
+              if(!field || !optName) return false;
+              const opts = field.options || [];
+              const normalizedOptName = norm(optName);
+              const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+              if(!wanted) {
+                console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
+                return false;
+              }
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: field.id, opt: wanted.id }
+              );
+              return true;
+            }
+            
+            const prComments = new Map();
+            let didFail = false;
+            let hasOpenRfc = false;
+
+            for (const issueNum of allIssueNumbers) {
+              console.log(`Procesando issue #${issueNum}`);
+              
+              let issue;
+              try {
+                issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum
+                });
+              } catch (e) {
+                console.log(`No se pudo obtener issue #${issueNum}: ${e.message}`);
+                continue;
+              }
+              
+              const hasRfc = (issue.data.labels || []).some(l => norm(l.name) === 'rfc');
+              if (!hasRfc) {
+                console.log(`Issue #${issueNum} no es 'rfc'. Saltando.`);
+                continue;
+              }
+              
+              // --- Es un issue RFC ---
+
+              if (issue.data.state !== 'open') {
+                console.log(`Issue #${issueNum} ya está cerrado. Verificando motivo...`);
+                
+                const hasDeniedLabel = (issue.data.labels || []).some(l => norm(l.name) === 'denied');
+                const reason = issue.data.state_reason;
+                let commentBody = '';
+
+                if (hasDeniedLabel) {
+                  commentBody = `⚠️ **Referencia a Issue Denegado:** El Issue #${issueNum} (referenciado en este PR) fue denegado y está cerrado.`;
+                } else if (reason === 'not_planned') {
+                  commentBody = `ℹ️ **Referencia a Issue No Planeado:** El Issue #${issueNum} (referenciado en este PR) está cerrado como "No Planeado".`;
+                } else if (reason === 'completed') {
+                  commentBody = `✅ **Referencia a Issue Completado:** El Issue #${issueNum} (referenciado en este PR) ya fue completado.`;
+                }
+                
+                if (commentBody && !prComments.has(commentBody)) {
+                  prComments.set(commentBody, true);
+                }
+                
+                continue; // No es un error, solo informativo
+              }
+              
+              // --- Es un RFC abierto ---
+              hasOpenRfc = true; 
+              
+              if (!closingNumbers.has(issueNum)) {
+                // ¡Error! Es un RFC abierto pero no se está cerrando
+                const commentBody = `❌ **ACCIÓN REQUERIDA:** El Issue RFC #${issueNum} está abierto y debe cerrarse con este PR.\n\nPor favor, edita la descripción de este PR y añade una palabra clave como \`closes #${issueNum}\`, \`fixes #${issueNum}\`, o \`resolves #${issueNum}\` para continuar.`;
+                if (!prComments.has(commentBody)) {
+                  prComments.set(commentBody, true);
+                  core.setFailed(`El Issue RFC #${issueNum} debe tener una palabra clave de cierre.`);
+                  didFail = true;
+                }
+                continue;
+              }
+              
+              // --- Es un RFC abierto y se está cerrando (Golden Path) ---
+              const hasUser = (issue.data.labels || []).some(l => norm(l.name) === 'user');
+              
+              let projectId = null;
+              if (hasUser) {
+                projectId = await getUserProjByNum(PN_USER);
+              } else {
+                projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+              }
+              
+              if(!projectId) {
+                console.log(`No se pudo encontrar proyecto para issue #${issueNum}.`);
+                continue;
+              }
+
+              const itemId = await findItemId(projectId, issueNum);
+              if (!itemId) {
+                console.log(`Issue #${issueNum} no es un item en el proyecto.`);
+                continue;
+              }
+
+              const allFields = await getFields(projectId);
+              const fStatus = allFields.find(f => norm(f?.name) === 'status');
+              
+              if (!fStatus) {
+                console.log(`Campo "Status" no encontrado en el proyecto para #${issueNum}.`);
+                continue;
+              }
+              
+              const success = await setSelect(projectId, itemId, fStatus, 'In Review');
+              
+              if (success) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  body: `## 🔄 En Revisión
+
+            El estado ha sido actualizado a \`In Review\` debido al Pull Request #${prNumber}.`
+                            });
+                          }
+                        }
+                        
+                        // --- Post-Loop ---
+                        
+                        if (prComments.size > 0) {
+                          const finalComment = Array.from(prComments.keys()).join('\n\n---\n');
+                          await github.rest.issues.createComment({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: prNumber,
+                            body: finalComment
+                          });
+                        }
+
+                        if (didFail) {
+                          // Si fallamos, aseguramos que el mensaje de error principal esté claro.
+                          core.setFailed('Este PR no cumple con las reglas de vinculación de issues RFC. Revisa los comentarios del bot.');
+                          return;
+                        }
+                        
+                        if (hasOpenRfc) {
+                          console.log('Todos los RFCs abiertos fueron procesados. Job exitoso.');
+                        } else {
+                          console.log('PR no linkea a ningún RFC abierto. Pasando.');
+                        }
+
+  # --- Job: process-pr-closed (PR Rechazado) ---
+  process-pr-closed:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.base_ref == 'main' && github.event.pull_request.merged == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Issue Status to In Progress
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const pr = context.payload.pull_request;
+            const prBody = pr.body || '';
+            const prTitle = pr.title || '';
+            const prNumber = pr.number;
+            const content = prBody + ' ' + prTitle;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const issueRegex = /(?:closes|fixes|resolves) #(\d+)|#(\d+)/gi;
+            let match;
+            const issueNumbers = new Set();
+            
+            while ((match = issueRegex.exec(content)) !== null) {
+              issueNumbers.add(match[1] || match[2]);
+            }
+            
+            if (issueNumbers.size === 0) {
+              console.log('PR no linkea a ningun issue.');
+              return;
+            }
+            
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+            const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER||'0',10);
+            
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+
+            async function getOrgProjByNum(n){
+              if(!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){ organization(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            
+            async function findItemId(projectId, issueNumber){
+              const r = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issueNumber) }
+              );
+              return r?.node?.items?.nodes?.find(n=>n.content?.number===parseInt(issueNumber,10))?.id || null;
+            }
+            
+            async function getFields(projectId){
+              const r = await github.graphql(
+                `query($projectId:ID!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    fields(first:50){ nodes{
+                      ... on ProjectV2FieldCommon { id name }
+                      ... on ProjectV2SingleSelectField { id name options{ id name } }
+                    } }
+                  } }
+                }`, { projectId }
+              );
+              return r?.node?.fields?.nodes || [];
+            }
+
+            async function setSelect(projectId, itemId, field, optName){
+              if(!field || !optName) return false;
+              const opts = field.options || [];
+              const normalizedOptName = norm(optName);
+              const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+              if(!wanted) {
+                console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
+                return false;
+              }
+              await github.graphql(
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                  updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                }`, { projectId, itemId, fieldId: field.id, opt: wanted.id }
+              );
+              return true;
+            }
+
+            for (const issueNum of issueNumbers) {
+              console.log(`Procesando issue #${issueNum}`);
+              
+              let issue;
+              try {
+                issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum
+                });
+              } catch (e) {
+                console.log(`No se pudo obtener issue #${issueNum}: ${e.message}`);
+                continue;
+              }
+
+              if (issue.data.state !== 'open') {
+                console.log(`Issue #${issueNum} ya está cerrado. Saltando.`);
+                continue;
+              }
+              
+              const hasRfc = (issue.data.labels || []).some(l => norm(l.name) === 'rfc');
+              if (!hasRfc) {
+                console.log(`Issue #${issueNum} no tiene la etiqueta 'rfc'. Saltando.`);
+                continue;
+              }
+              
+              const hasUser = (issue.data.labels || []).some(l => norm(l.name) === 'user');
+              
+              let projectId = null;
+              if (hasUser) {
+                projectId = await getUserProjByNum(PN_USER);
+                console.log(`Issue #${issueNum} es de 'user'. Buscando en proyecto USER.`);
+              } else {
+                projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+                console.log(`Issue #${issueNum} es un RFC normal. Buscando en proyecto MAIN/ORG.`);
+              }
+              
+              if(!projectId) {
+                console.log(`No se pudo encontrar un ID de proyecto (MAIN o USER) para issue #${issueNum}.`);
+                continue;
+              }
+              
+              const itemId = await findItemId(projectId, issueNum);
+              if (!itemId) {
+                console.log(`Issue #${issueNum} no es un item en el proyecto.`);
+                continue;
+              }
+              
+              const allFields = await getFields(projectId);
+              const fStatus = allFields.find(f => norm(f?.name) === 'status');
+              
+              if (!fStatus) {
+                console.log(`Campo "Status" no encontrado en el proyecto (ID: ${projectId}).`);
+                continue;
+              }
+              
+              const success = await setSelect(projectId, itemId, fStatus, 'In Progress');
+              
+              if (success) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  body: `## ⏪ Reabierto
+
+              El Pull Request #${prNumber} fue cerrado sin merge. El estado del issue vuelve a \`In Progress\`.`
+                              });
+                            }
+            }
+            
+  # --- Job: process-pr-merged (PR Aprobado) ---
+  process-pr-merged:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.base_ref == 'main' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Close Linked Issues
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const pr = context.payload.pull_request;
+            const prBody = pr.body || '';
+            const prTitle = pr.title || '';
+            const prNumber = pr.number;
+            const content = prBody + ' ' + prTitle;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const issueRegex = /#(\d+)/gi;
+            let match;
+            const issueNumbers = new Set();
+            
+            while ((match = issueRegex.exec(content)) !== null) {
+              issueNumbers.add(match[1]);
+            }
+            
+            if (issueNumbers.size === 0) {
+              console.log('PR no linkea a ningun issue.');
+              return;
+            }
+
+            for (const issueNum of issueNumbers) {
+              console.log(`Procesando issue #${issueNum} para cierre.`);
+              
+              let issue;
+              try {
+                issue = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum
+                });
+              } catch (e) {
+                console.log(`No se pudo obtener issue #${issueNum}: ${e.message}`);
+                continue;
+              }
+
+              if (issue.data.state !== 'open') {
+                console.log(`Issue #${issueNum} ya está cerrado. Saltando.`);
+                continue;
+              }
+              
+              const hasRfc = (issue.data.labels || []).some(l => norm(l.name) === 'rfc');
+              if (!hasRfc) {
+                console.log(`Issue #${issueNum} no tiene la etiqueta 'rfc'. Saltando.`);
+                continue;
+              }
+              
+              try {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  state: 'closed',
+                  state_reason: 'completed'
+                });
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  body: `## ✅ Completado
+
+            El Pull Request #${prNumber} que resuelve este issue fue fusionado.
+
+            Cerrando issue y actualizando estado del proyecto a \`Done\`.`
+                            });
+
+                          } catch (e) {
+                            console.log(`No se pudo cerrar o comentar en el issue #${issueNum}: ${e.message}`);
+                          }
+            }
+
+  # --- Job: process-ccc-commands (Sin cambios) ---
+  process-ccc-commands:
+    if: github.event_name == 'issue_comment' && github.event.action == 'created'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Process Commands
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const comment = context.payload.comment.body;
+            const issue = context.payload.issue;
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            
+            const hasUser = (issue.labels || []).some(l => norm(l.name) === 'user');
+            if (!hasUser) {
+              console.log('No es un issue de usuario, saltando.');
+              return;
+            }
+            
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+            const userProjUrl = `https://github.com/users/${USER_LOGIN}/projects/${PN_USER}`;
+            
+            const cmd = comment.toLowerCase().trim();
+            if (!cmd.startsWith('/verificar') && !cmd.startsWith('/actualizar') && !cmd.startsWith('/ayuda')) {
+              return;
+            }
+            
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){
+                  user(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            
+            async function findItemId(projectId, issueNumber){
+              const r = await github.graphql(
+                `query($projectId:ID!, $q:String!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                  } }
+                }`, { projectId, q: String(issueNumber) }
+              );
+              return r?.node?.items?.nodes?.find(n=>n.content?.number===issueNumber)?.id || null;
+            }
+            
+            async function getFields(projectId){
+              const r = await github.graphql(
+                `query($projectId:ID!){
+                  node(id:$projectId){ ... on ProjectV2 {
+                    fields(first:100){ nodes{
+                      ... on ProjectV2FieldCommon { id name dataType }
+                      ... on ProjectV2SingleSelectField { id name options { id name } }
+                    } }
+                  } }
+                }`, { projectId }
+              );
+              return r?.node?.fields?.nodes || [];
+            }
+            
+            async function getFieldValues(itemId){
+              const r = await github.graphql(
+                `query($itemId:ID!){
+                  node(id:$itemId){
+                    ... on ProjectV2Item {
+                      fieldValues(first:100){
+                        nodes{
+                          ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { id name } } }
+                          ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { id name } } }
+                          ... on ProjectV2ItemFieldSingleSelectValue { name optionId field { ... on ProjectV2FieldCommon { id name } } }
+                        }
+                      }
+                    }
+                  }
+                }`, { itemId }
+              );
+              return r?.node?.fieldValues?.nodes || [];
+            }
+            
+            const projectId = await getUserProjByNum(PN_USER);
+            if (!projectId) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '❌ No se pudo encontrar el proyecto de usuarios.'
+              });
+              return;
+            }
+            
+            const itemId = await findItemId(projectId, issue.number);
+            if (!itemId) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: '❌ No se pudo encontrar este issue en el proyecto.'
+              });
+              return;
+            }
+            
+            if (cmd.startsWith('/ayuda')) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## 📚 Ayuda - Formulario CCC
+
+              ### Descripción de campos requeridos:
+
+              **Change Type (Tipo de cambio)**
+              - Escribe una de las opciones: \`estandar\`, \`normal\`, o \`emergencia\`.
+
+              **Impact (Impacto)**
+              - Describe qué sistemas, usuarios o procesos se verán afectados
+              - Indica el nivel de criticidad (Bajo/Medio/Alto)
+              - Ejemplo: "Afecta a 500 usuarios del módulo de facturación. Criticidad: Alta"
+
+              **Implementation Plan (Plan de implementación)**
+              - Lista los pasos específicos para implementar el cambio
+              - Incluye recursos necesarios (personas, herramientas)
+              - Especifica duración estimada y ventana de mantenimiento
+              - Ejemplo:
+                1. Backup de base de datos (30 min)
+                2. Deploy de nueva versión (15 min)
+                3. Migración de datos (1 hora)
+
+              **RollBack Planning (Plan de reversa)**
+              - Describe cómo revertir el cambio si algo sale mal
+              - Incluye comandos o scripts específicos
+              - Indica tiempo estimado de recuperación
+              - Especifica si es completamente reversible
+
+              **Test Planning (Plan de pruebas)**
+              - Detalla la estrategia de testing
+              - Lista casos de prueba críticos
+              - Incluye tests unitarios, integración y E2E
+              - Define criterios de éxito
+
+              **Approvers (Aprobadores)**
+              - Menciona (@usuario) a todas las personas que deben aprobar
+              - Típicamente: Tech Lead, Product Owner, DevOps
+              - Ejemplo: @tech-lead @product-owner @devops-team
+
+              **Start date (Fecha de inicio)**
+              - Fecha en formato YYYY-MM-DD
+              - Ejemplo: 2025-11-15
+
+              **Target date (Fecha objetivo)**
+              - Fecha límite en formato YYYY-MM-DD
+              - Ejemplo: 2025-11-30
+
+              ### Comandos disponibles:
+              - \`/verificar\` - Verifica si completaste los campos en el proyecto
+              - \`/actualizar\` - Actualiza el proyecto con info de este issue
+              - \`/ayuda\` - Muestra esta ayuda`
+                            });
+                            return;
+                          }
+                          
+                          if (cmd.startsWith('/verificar')) {
+                            const fields = await getFields(projectId);
+                            const by = (names) => names.map(n=>fields.find(f=>norm(f?.name)===norm(n))).find(Boolean);
+                            
+                            const fChangeType = by(['Change Type', 'Tipo de cambio']);
+                            const fImpact   = by(['Impact']);
+                            const fPlan     = by(['Implementation Plan']);
+                            const fRollback = by(['RollBack Planning','Rollback Plan']);
+                            const fPruebas  = by(['Test Planning']);
+                            const fAprob    = by(['Approvers']);
+                            const fStart    = by(['Start date']);
+                            const fTarget   = by(['Target date']);
+                            
+                            const values = await getFieldValues(itemId);
+                            function getValue(field){
+                              if(!field) return null;
+                              const v = values.find(n => norm(n.field?.name) === norm(field.name));
+                              if(!v) return null;
+                              if ('text' in v) return (v.text||'').trim();
+                              if ('date' in v) return (v.date||'').trim();
+                              if ('name' in v) return (v.name||'').trim();
+                              return null;
+                            }
+                            
+                            const missing = [];
+                            const complete = [];
+                            
+                            const checkField = (field, name) => {
+                              const val = getValue(field);
+                              if (!val) {
+                                missing.push(name);
+                              } else {
+                                complete.push(`${name}: ✅`);
+                              }
+                            };
+                            
+                            checkField(fChangeType, 'Change Type');
+                            checkField(fImpact, 'Impact');
+                            checkField(fPlan, 'Implementation Plan');
+                            checkField(fRollback, 'RollBack Planning');
+                            checkField(fPruebas, 'Test Planning');
+                            checkField(fAprob, 'Approvers');
+                            checkField(fStart, 'Start date');
+                            checkField(fTarget, 'Target date');
+                            
+                            if (missing.length === 0) {
+                              await github.rest.issues.createComment({
+                                owner: context.repo.owner,
+                                repo: context.repo.repo,
+                                issue_number: issue.number,
+                                body: `## ✅ Verificación Completa
+
+              ¡Excelente! Todos los campos requeridos están completos:
+
+              ${complete.map(c => `- ${c}`).join('\n')}
+
+              Ahora puedes agregar la etiqueta \`approved\` para completar la aprobación.`
+                });
+                
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  labels: ['approved']
+                });
+              } else {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `## ⚠️ Campos Faltantes
+
+            Aún faltan los siguientes campos en el proyecto:
+
+            ${missing.map(m => `- [ ] \`${m}\``).join('\n')}
+
+            **[Ir al proyecto para completarlos →](${userProjUrl})**
+
+            Los siguientes campos ya están completos:
+            ${complete.map(c => `- ${c}`).join('\n')}
+
+            Una vez completados, ejecuta \`/verificar\` nuevamente.`
+                            });
+                          }
+                          return;
+            }
+            
+            if (cmd.startsWith('/actualizar')) {
+              const issueBody = issue.body || '';
+              const updated = [];
+              const failed = [];
+              
+              function escRE(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}
+              
+              function grab(label) {
+                const L = escRE(label);
+                const patterns = [
+                  new RegExp(`^###\\s*${L}\\s*\\n+([\\s\\S]*?)(?=\\n###|\\n$|$)`, 'im'),
+                  new RegExp(`\`\`\`[\\s\\S]*?###\\s*${L}\\s*\\n+([\\s\\S]*?)(?=\\n###|\\n\`\`\`|$)`, 'i'),
+                  new RegExp(`\\*\\*${L}\\s*(\\([^)]*\\))?\\*\\*[\\s\\r\\n]+([\\s\\S]*?)(?=\\n\\*\\*|\\n###|\\n\\nComandos|\\n$|$)`, 'i'),
+                  new RegExp(`(?:\\*\\*${L}\\s*\\(.*?\\)\\*\\*|###\\s*${L})[\\s\\S]*?:\\[?.*?\\]?\\s*(\\w+)`, 'i')
+                ];
+                
+                for (const re of patterns) {
+                  let m = comment.match(re);
+                  if (!m) m = issueBody.match(re);
+                  if (m) {
+                    return (m[2] || m[1] || '').trim();
+                  }
+                }
+                return '';
+              }
+
+              function normalizeDate(dateStr) {
+                if (!dateStr) return null;
+                const match = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+                if (!match) return null; 
+                const year = match[1];
+                const month = match[2].padStart(2, '0');
+                const day = match[3].padStart(2, '0');
+                return `${year}-${month}-${day}`;
+              }
+              
+              const fields = await getFields(projectId);
+              const by = (names) => names.map(n=>fields.find(f=>norm(f?.name)===norm(n))).find(Boolean);
+              
+              const fChangeType = by(['Change Type', 'Tipo de cambio']);
+              const fImpact   = by(['Impact']);
+              const fPlan     = by(['Implementation Plan']);
+              const fRollback = by(['RollBack Planning','Rollback Plan']);
+              const fPruebas  = by(['Test Planning']);
+              const fAprob    = by(['Approvers']);
+              const fStart    = by(['Start date']);
+              const fTarget   = by(['Target date']);
+              
+              const setText = async(fieldName, field, value) => {
+                if (!field || !value) return;
+                try {
+                  await github.graphql(
+                    `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:String!){
+                      updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ text:$val } }){ clientMutationId }
+                    }`, { projectId, itemId, fieldId: field.id, val: value }
+                  );
+                  updated.push(fieldName);
+                } catch (e) {
+                  console.log(`Error al actualizar ${fieldName}: ${e.message}`);
+                  failed.push(fieldName);
+                }
+              };
+              
+              const setDate = async(fieldName, field, ymd) => {
+                if (!field || !ymd) return;
+                try {
+                  await github.graphql(
+                    `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:Date!){
+                      updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ date:$val } }){ clientMutationId }
+                    }`, { projectId, itemId, fieldId: field.id, val: ymd }
+                  );
+                  updated.push(fieldName);
+                } catch (e) {
+                  console.log(`Error al actualizar ${fieldName}: ${e.message}`);
+                  failed.push(fieldName);
+                }
+              };
+
+              async function setSelect(fieldName, field, optName){
+                if(!field || !optName) return;
+                
+                const normalizedOptName = norm(optName.replace(/[\*\[\]x\(\)]/g, ''));
+                
+                const opts = field.options || [];
+                const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+                
+                if(!wanted) {
+                  console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
+                  failed.push(fieldName);
+                  return;
+                }
+                
+                try {
+                  await github.graphql(
+                    `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                      updateProjectV2ItemFieldValue(input:{ projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt } }){ clientMutationId }
+                    }`, { projectId, itemId, fieldId: field.id, opt: wanted.id }
+                  );
+                  updated.push(fieldName);
+                } catch (e) {
+                  console.log(`Error al actualizar ${fieldName}: ${e.message}`);
+                  failed.push(fieldName);
+                }
+              }
+              
+              const changeType = grab('Change Type') || grab('Tipo de cambio');
+              const impact = grab('Impact');
+              const plan = grab('Implementation Plan');
+              const rollback = grab('RollBack Planning');
+              const testing = grab('Test Planning');
+              const approvers = grab('Approvers');
+              const startDate = normalizeDate(grab('Start date') || grab('Fecha de inicio'));
+              const targetDate = normalizeDate(grab('Target date') || grab('Fecha objetivo'));
+
+              await setSelect('Change Type', fChangeType, changeType);
+              await setText('Impact', fImpact, impact);
+              await setText('Implementation Plan', fPlan, plan);
+              await setText('RollBack Planning', fRollback, rollback);
+              await setText('Test Planning', fPruebas, testing);
+              await setText('Approvers', fAprob, approvers);
+              await setDate('Start date', fStart, startDate);
+              await setDate('Target date', fTarget, targetDate);
+
+              let body = '';
+              if (updated.length > 0) {
+                body += `## ✅ Proyecto Actualizado\n\nSe actualizaron los siguientes campos en el proyecto desde tu comentario:\n\n${updated.map(u => `- ✅ ${u}`).join('\n')}\n\n`;
+              }
+              
+              if (failed.length > 0) {
+                body += `## ⚠️ Campos Fallidos\n\nNo se pudieron actualizar los siguientes campos:\n\n${failed.map(f => `- ❌ ${f}`).join('\n')}\n\n`;
+                body += `Por favor, verifica que las opciones del proyecto (como 'Change Type') coincidan con lo que escribiste, o llena estos campos manualmente en el proyecto.\n\n`;
+              }
+              
+              if (updated.length === 0 && failed.length === 0) {
+                 body = `## ⚠️ No se encontró información para actualizar
+
+              Asegúrate de haber completado la plantilla en un comentario anterior con el formato correcto.
+
+              **Pega la plantilla de \`/ayuda\` y llénala** en un nuevo comentario, luego ejecuta \`/actualizar\` otra vez.`;
+                            } else {
+                              body += `**[Ver en el proyecto →](${userProjUrl})**\n\nEjecuta \`/verificar\` para confirmar que todo esté completo y proceder con la aprobación.`;
+                            }
+                            
+                            await github.rest.issues.createComment({
+                              owner: context.repo.owner,
+                              repo: context.repo.repo,
+                              issue_number: issue.number,
+                              body: body
+                            });
+                          }
+
+  # --- Job: set-project-status-on-close (Sin cambios) ---
+  set-project-status-on-close:
+    if: github.event_name == 'issues' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const hasUser = (issue.labels || []).some(l => (l.name||'').toLowerCase()==='user');
+
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+            const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER||'0',10);
+
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){ user(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            async function getOrgProjByNum(n){
+              if(!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){ organization(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+
+            let projectId = null;
+            if (hasUser) {
+              projectId = await getUserProjByNum(PN_USER);
+            } else {
+              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+            }
+            if(!projectId) return;
+
+            const issueNum = issue.number;
+            const items = await github.graphql(
+              `query($projectId:ID!, $q:String!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                } }
+              }`, { projectId, q: String(issueNum) }
+            );
+            const item = items.node.items.nodes.find(n=>n.content?.number===issueNum);
+            if(!item) return;
+
+            const fields = await github.graphql(
+              `query($projectId:ID!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  fields(first:50){ nodes{
+                    ... on ProjectV2FieldCommon { id name }
+                    ... on ProjectV2SingleSelectField { id name options{ id name } }
+                  } }
+                } }
+              }`, { projectId }
+            );
+            const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+            const status = fields.node.fields.nodes.find(f=>norm(f.name)==='status');
+            if(!status) return;
+
+            const reason = context.payload.issue.state_reason;
+            let optionName = 'Done';
+            if (reason !== 'completed') {
+               optionName = 'Not Planned';
+            }
+
+            const opt = (status.options||[]).find(o=>norm(o.name)===norm(optionName) || norm(o.name)==='no planeado' || norm(o.name)==='done');
+            if(!opt) return;
+
+            await github.graphql(
+              `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                updateProjectV2ItemFieldValue(input:{projectId:$projectId,itemId:$itemId,fieldId:$fieldId,value:{singleSelectOptionId:$opt}}){ clientMutationId }
+              }`, { projectId, itemId: item.id, fieldId: status.id, opt: opt.id }
+            );
+
+  # --- Job: remove-project-item-on-delete (Sin cambios) ---
+  remove-project-item-on-delete:
+    if: github.event_name == 'issues' && github.event.action == 'deleted'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const hasUser = (issue.labels || []).some(l => (l.name||'').toLowerCase()==='user');
+
+            const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+            const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER||'0',10);
+
+            async function getUserProjByNum(n){
+              const r = await github.graphql(
+                `query($login:String!){ user(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: USER_LOGIN }
+              ).catch(()=>null);
+              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            async function getOrgProjByNum(n){
+              if(!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){ organization(login:$login){ projectsV2(first:50){ nodes{ id number } } } }`,
+                { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+
+            let projectId = null;
+            if (hasUser) {
+              projectId = await getUserProjByNum(PN_USER);
+            } else {
+              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+            }
+            if(!projectId) return;
+
+            const items = await github.graphql(
+              `query($projectId:ID!, $q:String!){
+                node(id:$projectId){ ... on ProjectV2 {
+                  items(first:50, query:$q){ nodes{ id content{ ... on Issue { number } } } }
+                } }
+              }`, { projectId, q: String(issue.number) }
+            );
+            const item = items.node.items.nodes.find(n=>n.content?.number===issue.number);
+            if(!item) return;
+
+            await github.graphql(
+              `mutation($projectId:ID!, $itemId:ID!){
+                deleteProjectV2Item(input:{ projectId:$projectId, itemId:$itemId }){ clientMutationId }
+              }`, { projectId, itemId: item.id }
+            );
