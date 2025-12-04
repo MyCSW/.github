@@ -19,13 +19,13 @@ permissions:
   pull-requests: read
 
 env:
-  PROJECT_URL: https://github.com/users/ErickGuerron/projects/1
+  PROJECT_URL: https://github.com/orgs/MyCSW/projects
   ORG_LOGIN: MyCSW
   USER_LOGIN: ErickGuerron
-  PROJECT_NUMBER: 1
-  PROJECT_TITLE: Formularios-control-cambios
+  PROJECT_NUMBER: 2
+  PROJECT_TITLE: Formularios-Develops-ORG
   PROJECT_NUMBER_USER: 3
-  PROJECT_TITLE_USER: Formularios-Usuarios
+  PROJECT_TITLE_USER: Formularios-Usuario_Final-ORG
 
 jobs:
   # --- Job: process_rfc_on_github (Sin cambios) ---
@@ -124,8 +124,8 @@ jobs:
             }
             async function findProjectV2Main() {
               let id = await resolveFromUrl(PROJECT_URL);
-              if (!id) id = await resolveByUser(PROJECT_NUMBER) || await resolveByUser(PROJECT_TITLE);
               if (!id) id = await resolveByOrg(PROJECT_NUMBER)  || await resolveByOrg(PROJECT_TITLE);
+              if (!id) id = await resolveByUser(PROJECT_NUMBER) || await resolveByUser(PROJECT_TITLE);
               return id;
             }
             async function findProjectV2User() {
@@ -344,6 +344,35 @@ jobs:
             await setText  (projectIdMain, itemIdMain, fAprobM?.id,   grab('Aprobadores requeridos') || grab('Approvers'));
             await setText  (projectIdMain, itemIdMain, fSolicM?.id,   grab('Solicitante') || grab('Solicitor') || grab('Applicant') || grab('Requester'));
 
+            // Cerrar formulario automáticamente con estado "No Planificado" al enviarse
+            if (context.payload.action === 'opened' && issue.state === 'open') {
+              console.log('Cerrando formulario automáticamente con estado "No Planificado"...');
+              await github.rest.issues.update({
+                owner,
+                repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'not_planned'
+              });
+
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `## 📋 Formulario Enviado
+
+            El formulario ha sido enviado exitosamente y cerrado automáticamente con estado **No Planificado**.
+
+            **Próximos pasos:**
+            - El equipo CCC revisará la solicitud
+            - Para aprobar o denegar, un miembro del equipo CCC debe agregar la etiqueta correspondiente (\`approved\` o \`denied\`)
+            - El formulario se reabrirá automáticamente si es aprobado
+
+            **Estado:** Cerrado como "No Planificado"
+            **Fecha de envío:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
+                          });
+                        }
+
   # --- Job: process-user-approval (Solo para 'user') ---
   process-user-approval:
     if: |
@@ -363,6 +392,47 @@ jobs:
           script: |
             const issue = context.payload.issue;
             const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
+
+            // Validación de permisos: solo miembros del equipo "ccc" pueden aprobar
+            const actor = context.actor;
+            const ORG_LOGIN = process.env.ORG_LOGIN;
+
+            let isCccMember = false;
+            if (ORG_LOGIN) {
+              try {
+                await github.rest.teams.getMembershipForUserInOrg({
+                  org: ORG_LOGIN,
+                  team_slug: 'ccc',
+                  username: actor
+                });
+                isCccMember = true;
+              } catch (error) {
+                if (error.status === 404) {
+                  isCccMember = false;
+                } else {
+                  console.log(`Error al verificar membresía: ${error.message}`);
+                  isCccMember = false;
+                }
+              }
+            }
+
+            if (!isCccMember) {
+              console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: context.payload.label.name
+              }).catch(() => {});
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## ⛔ Permiso Denegado\n\n@${actor}, no tienes permisos para aprobar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
+              });
+              return;
+            }
+
             const hasUser = (issue.labels || []).some(l => norm(l.name)==='user');
             if (!hasUser) {
               console.log('Issue no tiene label "user". Saltando.');
@@ -749,9 +819,48 @@ jobs:
           script: |
             const issue = context.payload.issue;
             const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
-            
-            const USER_LOGIN = process.env.USER_LOGIN;
+
+            // Validación de permisos: solo miembros del equipo "ccc" pueden aprobar
+            const actor = context.actor;
             const ORG_LOGIN  = process.env.ORG_LOGIN;
+
+            let isCccMember = false;
+            if (ORG_LOGIN) {
+              try {
+                await github.rest.teams.getMembershipForUserInOrg({
+                  org: ORG_LOGIN,
+                  team_slug: 'ccc',
+                  username: actor
+                });
+                isCccMember = true;
+              } catch (error) {
+                if (error.status === 404) {
+                  isCccMember = false;
+                } else {
+                  console.log(`Error al verificar membresía: ${error.message}`);
+                  isCccMember = false;
+                }
+              }
+            }
+
+            if (!isCccMember) {
+              console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: context.payload.label.name
+              }).catch(() => {});
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## ⛔ Permiso Denegado\n\n@${actor}, no tienes permisos para aprobar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
+              });
+              return;
+            }
+
+            const USER_LOGIN = process.env.USER_LOGIN;
             const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
             
             async function getUserProjByNum(n){
@@ -879,7 +988,47 @@ jobs:
           script: |
             const issue = context.payload.issue;
             const norm = (s) => (s ?? '').toString().normalize('NFD').replace(/\p{Diacritic}/gu,'').trim().toLowerCase();
-            
+
+            // Validación de permisos: solo miembros del equipo "ccc" pueden denegar
+            const actor = context.actor;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
+
+            let isCccMember = false;
+            if (ORG_LOGIN) {
+              try {
+                await github.rest.teams.getMembershipForUserInOrg({
+                  org: ORG_LOGIN,
+                  team_slug: 'ccc',
+                  username: actor
+                });
+                isCccMember = true;
+              } catch (error) {
+                if (error.status === 404) {
+                  isCccMember = false;
+                } else {
+                  console.log(`Error al verificar membresía: ${error.message}`);
+                  isCccMember = false;
+                }
+              }
+            }
+
+            if (!isCccMember) {
+              console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: context.payload.label.name
+              }).catch(() => {});
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## ⛔ Permiso Denegado\n\n@${actor}, no tienes permisos para denegar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
+              });
+              return;
+            }
+
             const hasRfc = (issue.labels || []).some(l => norm(l.name) === 'rfc');
             if (!hasRfc) {
               console.log('No es un issue RFC, saltando.');
@@ -887,9 +1036,8 @@ jobs:
             }
 
             const hasUser = (issue.labels || []).some(l => norm(l.name) === 'user');
-            
+
             const USER_LOGIN = process.env.USER_LOGIN;
-            const ORG_LOGIN  = process.env.ORG_LOGIN;
             const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
             const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
             
