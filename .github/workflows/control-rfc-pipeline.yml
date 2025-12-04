@@ -19,7 +19,7 @@ permissions:
   pull-requests: read
 
 env:
-  PROJECT_URL: https://github.com/orgs/MyCSW/projects
+  PROJECT_URL: https://github.com/orgs/MyCSW/projects/2
   ORG_LOGIN: MyCSW
   USER_LOGIN: ErickGuerron
   PROJECT_NUMBER: 2
@@ -28,7 +28,7 @@ env:
   PROJECT_TITLE_USER: Formularios-Usuario_Final-ORG
 
 jobs:
-  # --- Job: process_rfc_on_github (Sin cambios) ---
+  # --- Job: process_rfc_on_github --- 
   process_rfc_on_github:
     if: |
       github.event_name == 'issues' &&
@@ -77,59 +77,167 @@ jobs:
 
             const hasUserLabel = (issue.labels || []).some(l => norm(l.name) === 'user');
 
-            const ORG_LOGIN = process.env.ORG_LOGIN;
-            const USER_LOGIN = process.env.USER_LOGIN;
-            const PROJECT_NUMBER = parseInt(process.env.PROJECT_NUMBER || '0', 10);
-            const PROJECT_TITLE  = process.env.PROJECT_TITLE || '';
-            const PROJECT_NUMBER_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
-            const PROJECT_TITLE_USER  = process.env.PROJECT_TITLE_USER || '';
-            const PROJECT_URL = process.env.PROJECT_URL || '';
+            // =========================
+            // Resolución de Projects (ORG primero, luego USER)
+            // =========================
+            const ORG_LOGIN  = (process.env.ORG_LOGIN || '').trim();
+            const USER_LOGIN = (process.env.USER_LOGIN || context.repo.owner).trim();
 
-            async function resolveFromUrl(url){
-              const mu = url.match(/https:\/\/github\.com\/users\/([^/]+)\/projects\/(\d+)/i);
-              if (mu) {
-                const login = mu[1], num = parseInt(mu[2],10);
+            const PROJECT_NUMBER       = parseInt(process.env.PROJECT_NUMBER || '0', 10);
+            const PROJECT_TITLE        = (process.env.PROJECT_TITLE || '').trim();
+            const PROJECT_NUMBER_USER  = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+            const PROJECT_TITLE_USER   = (process.env.PROJECT_TITLE_USER || '').trim();
+            const PROJECT_URL          = (process.env.PROJECT_URL || '').trim();
+
+            const log = (msg) => console.log(`[rfc-project] ${msg}`);
+
+            // Soporta URLs de usuario y organización:
+            //  - https://github.com/orgs/MyCSW/projects/2
+            //  - https://github.com/users/ErickGuerron/projects/1
+            async function resolveFromUrl(url) {
+              if (!url) return null;
+
+              const mUser = url.match(/^https:\/\/github\.com\/users\/([^/]+)\/projects\/(\d+)/i);
+              const mOrg  = url.match(/^https:\/\/github\.com\/orgs\/([^/]+)\/projects\/(\d+)/i);
+
+              try {
+                if (mOrg) {
+                  const login = mOrg[1];
+                  const num   = parseInt(mOrg[2], 10);
+                  log(`resolveFromUrl(org) login=${login}, num=${num}`);
+                  const r = await github.graphql(
+                    `query($login:String!){
+                      organization(login:$login){
+                        projectsV2(first:100){
+                          nodes { id number title }
+                        }
+                      }
+                    }`,
+                    { login }
+                  ).catch(e => { log(`GraphQL org error: ${e.message}`); return null; });
+
+                  const nodes = (r?.organization?.projectsV2?.nodes || []).filter(Boolean);
+                  const hit   = nodes.find(p => p.number === num);
+                  if (hit) return hit.id;
+                }
+
+                if (mUser) {
+                  const login = mUser[1];
+                  const num   = parseInt(mUser[2], 10);
+                  log(`resolveFromUrl(user) login=${login}, num=${num}`);
+                  const r = await github.graphql(
+                    `query($login:String!){
+                      user(login:$login){
+                        projectsV2(first:100){
+                          nodes { id number title }
+                        }
+                      }
+                    }`,
+                    { login }
+                  ).catch(e => { log(`GraphQL user error: ${e.message}`); return null; });
+
+                  const nodes = (r?.user?.projectsV2?.nodes || []).filter(Boolean);
+                  const hit   = nodes.find(p => p.number === num);
+                  if (hit) return hit.id;
+                }
+              } catch (e) {
+                log(`resolveFromUrl exception: ${e.message}`);
+              }
+
+              log('resolveFromUrl: no se pudo resolver ID desde URL');
+              return null;
+            }
+
+            async function resolveByUser(numberOrTitle) {
+              try {
                 const r = await github.graphql(
                   `query($login:String!){
-                    user(login:$login){ projectsV2(first:100){ nodes{ id number title } } }
-                  }`, { login }
-                ).catch(()=>null);
-                const hit = r?.user?.projectsV2?.nodes?.find(n=>n.number===num);
-                if (hit) return hit.id;
+                    user(login:$login){
+                      projectsV2(first:100){
+                        nodes { id number title }
+                      }
+                    }
+                  }`,
+                  { login: USER_LOGIN }
+                ).catch(e => { log(`resolveByUser error: ${e.message}`); return null; });
+
+                const nodes = (r?.user?.projectsV2?.nodes || []).filter(Boolean);
+                if (typeof numberOrTitle === 'number' && numberOrTitle > 0) {
+                  return nodes.find(n => n.number === numberOrTitle)?.id || null;
+                }
+                if (typeof numberOrTitle === 'string' && numberOrTitle) {
+                  return nodes.find(n => n.title === numberOrTitle)?.id || null;
+                }
+              } catch (e) {
+                log(`resolveByUser exception: ${e.message}`);
               }
               return null;
             }
-            async function resolveByUser(numberOrTitle){
-              const r = await github.graphql(
-                `query($login:String!){
-                  user(login:$login){ projectsV2(first:100){ nodes{ id number title } } }
-                }`, { login: USER_LOGIN }
-              ).catch(()=>null);
-              const nodes = r?.user?.projectsV2?.nodes || [];
-              if (typeof numberOrTitle === 'number' && numberOrTitle > 0) return nodes.find(n=>n.number===numberOrTitle)?.id || null;
-              if (typeof numberOrTitle === 'string' && numberOrTitle)     return nodes.find(n=>n.title===numberOrTitle)?.id  || null;
-              return null;
-            }
-            async function resolveByOrg(numberOrTitle){
+
+            async function resolveByOrg(numberOrTitle) {
               if (!ORG_LOGIN) return null;
-              const r = await github.graphql(
-                `query($login:String!){
-                  organization(login:$login){ projectsV2(first:100){ nodes{ id number title } } }
-                }`, { login: ORG_LOGIN }
-              ).catch(()=>null);
-              const nodes = r?.organization?.projectsV2?.nodes || [];
-              if (typeof numberOrTitle === 'number' && numberOrTitle > 0) return nodes.find(n=>n.number===numberOrTitle)?.id || null;
-              if (typeof numberOrTitle === 'string' && numberOrTitle)     return nodes.find(n=>n.title===numberOrTitle)?.id  || null;
+              try {
+                const r = await github.graphql(
+                  `query($login:String!){
+                    organization(login:$login){
+                      projectsV2(first:100){
+                        nodes { id number title }
+                      }
+                    }
+                  }`,
+                  { login: ORG_LOGIN }
+                ).catch(e => { log(`resolveByOrg error: ${e.message}`); return null; });
+
+                const nodes = (r?.organization?.projectsV2?.nodes || []).filter(Boolean);
+                if (typeof numberOrTitle === 'number' && numberOrTitle > 0) {
+                  return nodes.find(n => n.number === numberOrTitle)?.id || null;
+                }
+                if (typeof numberOrTitle === 'string' && numberOrTitle) {
+                  return nodes.find(n => n.title === numberOrTitle)?.id || null;
+                }
+              } catch (e) {
+                log(`resolveByOrg exception: ${e.message}`);
+              }
               return null;
             }
+
+            // Project principal (RFCs Develops)
             async function findProjectV2Main() {
+              // 1) Intentar por URL (ORG)
               let id = await resolveFromUrl(PROJECT_URL);
-              if (!id) id = await resolveByOrg(PROJECT_NUMBER)  || await resolveByOrg(PROJECT_TITLE);
-              if (!id) id = await resolveByUser(PROJECT_NUMBER) || await resolveByUser(PROJECT_TITLE);
+
+              // 2) Buscar en Projects de la ORGANIZACIÓN
+              if (!id) {
+                id = await resolveByOrg(PROJECT_NUMBER) || await resolveByOrg(PROJECT_TITLE);
+              }
+
+              // 3) Fallback: Projects del usuario
+              if (!id) {
+                id = await resolveByUser(PROJECT_NUMBER) || await resolveByUser(PROJECT_TITLE);
+              }
+
+              if (!id) log('Project principal no encontrado en ORG ni en USER');
+              else     log(`Project principal ID: ${id}`);
               return id;
             }
+
+            // Project para formularios "user"
             async function findProjectV2User() {
-              return await resolveByUser(PROJECT_NUMBER_USER) || await resolveByUser(PROJECT_TITLE_USER);
+              // 1) Projects de la ORGANIZACIÓN
+              let id =
+                (PROJECT_NUMBER_USER ? await resolveByOrg(PROJECT_NUMBER_USER) : null) ||
+                (PROJECT_TITLE_USER  ? await resolveByOrg(PROJECT_TITLE_USER)  : null);
+
+              // 2) Fallback: Projects de usuario
+              if (!id) {
+                id =
+                  (PROJECT_NUMBER_USER ? await resolveByUser(PROJECT_NUMBER_USER) : null) ||
+                  (PROJECT_TITLE_USER  ? await resolveByUser(PROJECT_TITLE_USER)  : null);
+              }
+
+              if (!id) log('Project de usuarios no encontrado en ORG ni en USER');
+              else     log(`Project de usuarios ID: ${id}`);
+              return id;
             }
 
             const issueRes = await github.graphql(
@@ -202,6 +310,9 @@ jobs:
               ).catch(()=>null);
             }
 
+            // =========================
+            // Rama para issues con label "user"
+            // =========================
             if (hasUserLabel) {
               const projectIdUser = await findProjectV2User();
               if (!projectIdUser) { console.log('Project usuarios no encontrado o sin permisos'); return }
@@ -229,7 +340,7 @@ jobs:
               const fExplU      = byU(['Explanation of the reason for the change','Explanation of the reason','Motivo del cambio']);
               const fNotesU     = byU(['Additional comments','Observaciones adicionales']);
 
-              // --- INICIO DE CAMBIOS ---
+              // --- INICIO DE CAMBIOS (email / reason / risk mapping) ---
               
               // 1. Obtener valores del body
               const vDept   = grab('Área / Departamento') || grab('Department');
@@ -238,7 +349,7 @@ jobs:
               let   vDesc   = grab('Descripción del cambio solicitado *') || grab('Descripción del cambio solicitado') || grab('Description of the requested change') || grab('Description of the request');
               let   vExpl   = grab('Motivo del cambio *') || grab('Motivo del cambio') || grab('Explanation of the reason for the change') || grab('Explanation of the reason');
               const vNotes  = grab('Observaciones adicionales') || grab('Additional comments');
-              const vEmail  = grab('Email') || grab('Contact Email'); // <-- ¡NUEVO!
+              const vEmail  = grab('Email') || grab('Contact Email'); // <-- Se toma del formulario
 
               if(!vDesc) vDesc = (grab('Descripción del cambio') || '').trim();
               if(!vExpl) vExpl = (grab('Explicación del motivo') || '').trim();
@@ -250,18 +361,18 @@ jobs:
               ).catch(()=>null);
               const authorName  = (authorInfo?.user?.name || authorLogin).trim();
               
-              // 2. Función de Traducción para el "Reason for change"
+              // 2. Traducción del "Reason for change"
               function translateReason(reason) {
                 const r = norm(reason);
-                if (r.includes('corrección') || r.includes('error')) return 'Error Correction'; // Asume que esta es tu opción en inglés
+                if (r.includes('corrección') || r.includes('error')) return 'Error Correction';
                 if (r.includes('mejora funcional')) return 'Functional Improvement';
                 if (r.includes('estético')) return 'Cosmetic Change';
                 if (r.includes('otro')) return 'Other';
-                return r; // Fallback
+                return r;
               }
               const translatedReason = translateReason(vReason);
 
-              // 3. Función de mapeo para "Risk" (basado en Prioridad)
+              // 3. Mapeo de "Risk" en función de la Prioridad
               function pickRiskFromPriority(priority, riskField){
                 const opts = (riskField?.options || []).map(o => o.name);
                 const names = opts.map(n => norm(n));
@@ -277,8 +388,6 @@ jobs:
 
               // 4. Setear Status (solo al crear)
               if (context.payload.action === 'opened') {
-                // El issue ya se crea como 'closed', el Action lo re-abre
-                // y lo pone en 'Backlog' y 'Inbox'.
                 await github.rest.issues.update({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -291,9 +400,9 @@ jobs:
 
               // 5. Aplicar todos los valores al proyecto
               await setText (projectIdUser, itemIdUser, fSolicU?.id,   authorName);
-              await setText (projectIdUser, itemIdUser, fEmailU?.id,   vEmail); // <-- ¡CAMBIADO!
+              await setText (projectIdUser, itemIdUser, fEmailU?.id,   vEmail);
               await setDate (projectIdUser, itemIdUser, fDateAppU?.id, new Date().toISOString().slice(0,10));
-              await setSelect(projectIdUser, itemIdUser, fReasonU,    translatedReason); // <-- ¡CAMBIADO!
+              await setSelect(projectIdUser, itemIdUser, fReasonU,    translatedReason);
               await setSelect(projectIdUser, itemIdUser, fRiskU,      pickRiskFromPriority(vPrior, fRiskU));
               await setText (projectIdUser, itemIdUser, fDeptU?.id,    vDept);
               await setText (projectIdUser, itemIdUser, fDescU?.id,    vDesc);
@@ -304,8 +413,9 @@ jobs:
               return;
             }
             
-            // ... (El resto del script para RFCs 'no-user' no cambia) ...
-            
+            // =========================
+            // RFCs "normales" (sin label user)
+            // =========================
             const projectIdMain = await findProjectV2Main();
             if (!projectIdMain) { console.log('Project principal no encontrado o sin permisos'); return }
             const itemIdMain = await ensureItem(projectIdMain);
@@ -325,7 +435,6 @@ jobs:
             const fSolicM    = byM(['Solicitante','Solicitor','Applicant','Requester']);
 
             if (context.payload.action === 'opened') {
-              // El issue ya se crea como 'closed', el Action lo re-abre
               await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -373,7 +482,7 @@ jobs:
                           });
                         }
 
-  # --- Job: process-user-approval (Solo para 'user') ---
+  # --- Job: process-user-approval (Solo para 'user') --- 
   process-user-approval:
     if: |
       github.event_name == 'issues' &&
@@ -441,7 +550,9 @@ jobs:
 
             const USER_LOGIN = process.env.USER_LOGIN;
             const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER||'0',10);
-            const userProjUrl = `https://github.com/users/${USER_LOGIN}/projects/${PN_USER}`;
+            const userProjUrl = ORG_LOGIN
+              ? `https://github.com/orgs/${ORG_LOGIN}/projects/${PN_USER}`
+              : `https://github.com/users/${USER_LOGIN}/projects/${PN_USER}`;
 
             async function getUserProjByNum(n){
               const r = await github.graphql(
@@ -450,6 +561,15 @@ jobs:
                 }`, { login: USER_LOGIN }
               ).catch(()=>null);
               return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            async function getOrgProjByNum(n){
+              if (!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){
+                  organization(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
             }
             async function findItemId(projectId, issueNumber){
               const r = await github.graphql(
@@ -494,9 +614,9 @@ jobs:
             }
             const by = (fields, names) => names.map(n=>fields.find(f=>norm(f?.name)===norm(n))).find(Boolean);
 
-            const projectId = await getUserProjByNum(PN_USER);
+            const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             if(!projectId) {
-              console.log('Proyecto de usuario no encontrado.');
+              console.log('Proyecto de usuario/orga no encontrado.');
               return;
             }
             const itemId = await findItemId(projectId, issue.number);
@@ -559,7 +679,7 @@ jobs:
               issue_number: issue.number
             });
             
-            const hasForm = comments.data.some(c => c.body.includes(''));
+            const hasForm = comments.data.some(c => c.body.includes('Formulario de Control de Cambios (CCC)'));
             
             if (hasForm) {
               console.log('El formulario CCC ya existe');
@@ -600,7 +720,7 @@ jobs:
             También puedes completar la información directamente aquí. Copia y llena la siguiente plantilla:
 
             <details>
-            <summary><b>📋 Plantilla de información CCC</b> (Click para expandir)</summary>
+            <summary><b>📋 Formulario de información CCC</b> (Click para expandir)</summary>
 
             \`\`\`
             ### Change Type
@@ -670,8 +790,7 @@ jobs:
 
             ---
 
-            _🤖 Este formulario fue generado automáticamente. La etiqueta "approved" se removió temporalmente hasta completar la información._
-            `
+            _🤖 Este formulario fue generado automáticamente. La etiqueta "approved" se removió temporalmente hasta completar la información._`
                         });
 
       - name: Revert Status and Remove Label
@@ -799,7 +918,7 @@ jobs:
             Puedes proceder con la implementación según el plan establecido.`
                         });
 
-  # --- Job: process-rfc-approval (Solo para 'rfc' sin 'user') ---
+  # --- Job: process-rfc-approval (Solo para 'rfc' sin 'user') --- 
   process-rfc-approval:
     if: |
       github.event_name == 'issues' &&
@@ -909,7 +1028,7 @@ jobs:
               return true;
             }
             
-            const projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+            const projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
             if (!projectId) {
               console.log('Proyecto principal no encontrado.');
               return;
@@ -971,7 +1090,7 @@ jobs:
             **Fecha:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
                         });
 
-  # --- Job: process-denial (ACTUALIZADO para 'rfc' y 'user') ---
+  # --- Job: process-denial (ACTUALIZADO para 'rfc' y 'user') --- 
   process-denial:
     if: |
       github.event_name == 'issues' &&
@@ -1072,9 +1191,9 @@ jobs:
             
             let projectId = null;
             if (hasUser) {
-              projectId = await getUserProjByNum(PN_USER);
+              projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             } else {
-              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+              projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
             }
 
             if (!projectId) {
@@ -1160,7 +1279,7 @@ jobs:
               **Estado CCC:** Denied`
                           });
 
-  # --- Job: process-pr-link (ACTUALIZADO para bloquear PRs) ---
+  # --- Job: process-pr-link (ACTUALIZADO para bloquear PRs) --- 
   process-pr-link:
     if: github.event_name == 'pull_request' && (github.event.action == 'opened' || github.event.action == 'edited' || github.event.action == 'synchronize') && github.base_ref == 'main'
     runs-on: ubuntu-latest
@@ -1193,7 +1312,7 @@ jobs:
             
             if (allIssueNumbers.size === 0) {
               console.log('PR no linkea a ningun issue. Pasando.');
-              return; // Es un PR sin issues, es válido (ej. un typo)
+              return; // PR sin issues, permitido
             }
             
             const USER_LOGIN = process.env.USER_LOGIN;
@@ -1286,8 +1405,6 @@ jobs:
                 continue;
               }
               
-              // --- Es un issue RFC ---
-
               if (issue.data.state !== 'open') {
                 console.log(`Issue #${issueNum} ya está cerrado. Verificando motivo...`);
                 
@@ -1307,14 +1424,13 @@ jobs:
                   prComments.set(commentBody, true);
                 }
                 
-                continue; // No es un error, solo informativo
+                continue;
               }
               
-              // --- Es un RFC abierto ---
+              // RFC abierto
               hasOpenRfc = true; 
               
               if (!closingNumbers.has(issueNum)) {
-                // ¡Error! Es un RFC abierto pero no se está cerrando
                 const commentBody = `❌ **ACCIÓN REQUERIDA:** El Issue RFC #${issueNum} está abierto y debe cerrarse con este PR.\n\nPor favor, edita la descripción de este PR y añade una palabra clave como \`closes #${issueNum}\`, \`fixes #${issueNum}\`, o \`resolves #${issueNum}\` para continuar.`;
                 if (!prComments.has(commentBody)) {
                   prComments.set(commentBody, true);
@@ -1324,14 +1440,14 @@ jobs:
                 continue;
               }
               
-              // --- Es un RFC abierto y se está cerrando (Golden Path) ---
+              // RFC abierto y se está cerrando
               const hasUser = (issue.data.labels || []).some(l => norm(l.name) === 'user');
               
               let projectId = null;
               if (hasUser) {
-                projectId = await getUserProjByNum(PN_USER);
+                projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
               } else {
-                projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+                projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
               }
               
               if(!projectId) {
@@ -1367,8 +1483,6 @@ jobs:
                           }
                         }
                         
-                        // --- Post-Loop ---
-                        
                         if (prComments.size > 0) {
                           const finalComment = Array.from(prComments.keys()).join('\n\n---\n');
                           await github.rest.issues.createComment({
@@ -1380,7 +1494,6 @@ jobs:
                         }
 
                         if (didFail) {
-                          // Si fallamos, aseguramos que el mensaje de error principal esté claro.
                           core.setFailed('Este PR no cumple con las reglas de vinculación de issues RFC. Revisa los comentarios del bot.');
                           return;
                         }
@@ -1391,7 +1504,7 @@ jobs:
                           console.log('PR no linkea a ningún RFC abierto. Pasando.');
                         }
 
-  # --- Job: process-pr-closed (PR Rechazado) ---
+  # --- Job: process-pr-closed (PR Rechazado) --- 
   process-pr-closed:
     if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.base_ref == 'main' && github.event.pull_request.merged == false
     runs-on: ubuntu-latest
@@ -1516,11 +1629,11 @@ jobs:
               
               let projectId = null;
               if (hasUser) {
-                projectId = await getUserProjByNum(PN_USER);
-                console.log(`Issue #${issueNum} es de 'user'. Buscando en proyecto USER.`);
+                projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
+                console.log(`Issue #${issueNum} es de 'user'. Buscando en proyecto USER (ORG/USER).`);
               } else {
-                projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
-                console.log(`Issue #${issueNum} es un RFC normal. Buscando en proyecto MAIN/ORG.`);
+                projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
+                console.log(`Issue #${issueNum} es un RFC normal. Buscando en proyecto MAIN (ORG/USER).`);
               }
               
               if(!projectId) {
@@ -1556,7 +1669,7 @@ jobs:
                             }
             }
             
-  # --- Job: process-pr-merged (PR Aprobado) ---
+  # --- Job: process-pr-merged (PR Aprobado) --- 
   process-pr-merged:
     if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.base_ref == 'main' && github.event.pull_request.merged == true
     runs-on: ubuntu-latest
@@ -1637,7 +1750,7 @@ jobs:
                           }
             }
 
-  # --- Job: process-ccc-commands (Sin cambios) ---
+  # --- Job: process-ccc-commands --- 
   process-ccc-commands:
     if: github.event_name == 'issue_comment' && github.event.action == 'created'
     runs-on: ubuntu-latest
@@ -1658,8 +1771,11 @@ jobs:
             }
             
             const USER_LOGIN = process.env.USER_LOGIN;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
             const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
-            const userProjUrl = `https://github.com/users/${USER_LOGIN}/projects/${PN_USER}`;
+            const userProjUrl = ORG_LOGIN
+              ? `https://github.com/orgs/${ORG_LOGIN}/projects/${PN_USER}`
+              : `https://github.com/users/${USER_LOGIN}/projects/${PN_USER}`;
             
             const cmd = comment.toLowerCase().trim();
             if (!cmd.startsWith('/verificar') && !cmd.startsWith('/actualizar') && !cmd.startsWith('/ayuda')) {
@@ -1673,6 +1789,15 @@ jobs:
                 }`, { login: USER_LOGIN }
               ).catch(()=>null);
               return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+            }
+            async function getOrgProjByNum(n){
+              if (!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){
+                  organization(login:$login){ projectsV2(first:50){ nodes{ id number } } }
+                }`, { login: ORG_LOGIN }
+              ).catch(()=>null);
+              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
             }
             
             async function findItemId(projectId, issueNumber){
@@ -1719,7 +1844,7 @@ jobs:
               return r?.node?.fieldValues?.nodes || [];
             }
             
-            const projectId = await getUserProjByNum(PN_USER);
+            const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             if (!projectId) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
@@ -1929,7 +2054,7 @@ jobs:
               const fChangeType = by(['Change Type', 'Tipo de cambio']);
               const fImpact   = by(['Impact']);
               const fPlan     = by(['Implementation Plan']);
-              const fRollback = by(['RollBack Planning','Rollback Plan']);
+              const fRollback = by(['RollBack Planning','RollBack Plan']);
               const fPruebas  = by(['Test Planning']);
               const fAprob    = by(['Approvers']);
               const fStart    = by(['Start date']);
@@ -2038,7 +2163,7 @@ jobs:
                             });
                           }
 
-  # --- Job: set-project-status-on-close (Sin cambios) ---
+  # --- Job: set-project-status-on-close --- 
   set-project-status-on-close:
     if: github.event_name == 'issues' && github.event.action == 'closed'
     runs-on: ubuntu-latest
@@ -2073,9 +2198,9 @@ jobs:
 
             let projectId = null;
             if (hasUser) {
-              projectId = await getUserProjByNum(PN_USER);
+              projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             } else {
-              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+              projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
             }
             if(!projectId) return;
 
@@ -2119,7 +2244,7 @@ jobs:
               }`, { projectId, itemId: item.id, fieldId: status.id, opt: opt.id }
             );
 
-  # --- Job: remove-project-item-on-delete (Sin cambios) ---
+  # --- Job: remove-project-item-on-delete --- 
   remove-project-item-on-delete:
     if: github.event_name == 'issues' && github.event.action == 'deleted'
     runs-on: ubuntu-latest
@@ -2154,9 +2279,9 @@ jobs:
 
             let projectId = null;
             if (hasUser) {
-              projectId = await getUserProjByNum(PN_USER);
+              projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             } else {
-              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+              projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
             }
             if(!projectId) return;
 
