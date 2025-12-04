@@ -1073,6 +1073,8 @@ jobs:
 
                             const USER_LOGIN = process.env.USER_LOGIN;
                             const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+                            const PN_USER    = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+
                             
                             async function getUserProjByNum(n){
                               const r = await github.graphql(
@@ -2066,6 +2068,7 @@ jobs:
             const USER_LOGIN = process.env.USER_LOGIN;
             const ORG_LOGIN = process.env.ORG_LOGIN;
             const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+            
 
             let isCccMember = false;
             if (ORG_LOGIN) {
