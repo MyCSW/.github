@@ -591,7 +591,22 @@ jobs:
                           const by = (fields, names) =>
                             names.map(n => fields.find(f => norm(f?.name) === norm(n))).find(Boolean);
 
-                          const projectId = await getUserProjByNum(PN_USER);
+                          async function getOrgProjByNum(n){
+                            if(!ORG_LOGIN) return null;
+                            const r = await github.graphql(
+                              `query($login:String!){
+                                organization(login:$login){
+                                  projectsV2(first:50){
+                                    nodes{ id number }
+                                  }
+                                }
+                              }`,
+                              { login: ORG_LOGIN }
+                            ).catch(()=>null);
+                            return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+                          }
+
+                          const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
                           if(!projectId) {
                             console.log('Proyecto de usuario no encontrado.');
                             return;
@@ -1009,22 +1024,52 @@ jobs:
 
             if (!isCccMember) {
               console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
+              
+              // Verificar si ya tenía la etiqueta approved o denied antes
+              const currentLabels = (issue.labels || []).map(l => norm(l.name));
+              const hadApproved = currentLabels.filter(l => l === 'approved' || l === 'aprobado').length > 1;
+              const hadDenied = currentLabels.some(l => l === 'denied' || l === 'denegado');
+              
+              // Si ya estaba aprobado/denegado, no hacer cambios
+              if (hadApproved || hadDenied) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: context.payload.label.name
+                }).catch(() => {});
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `## ⛔ Permiso Denegado
+
+            @${actor}, no tienes permisos para modificar el estado de aprobación. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.
+
+            **El estado actual del issue no ha sido modificado.**`
+                });
+                return;
+              }
+              
+              // Si no tenía etiqueta previa, solo remover la nueva
               await github.rest.issues.removeLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 name: context.payload.label.name
               }).catch(() => {});
+              
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 body: `## ⛔ Permiso Denegado
 
-                @${actor}, no tienes permisos para aprobar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
-                              });
-                              return;
-                            }
+            @${actor}, no tienes permisos para aprobar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
+              });
+              return;
+            }
 
                             const USER_LOGIN = process.env.USER_LOGIN;
                             const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
@@ -1232,12 +1277,41 @@ jobs:
 
             if (!isCccMember) {
               console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
+              
+              // Verificar si ya tenía la etiqueta approved o denied antes
+              const currentLabels = (issue.labels || []).map(l => norm(l.name));
+              const hadApproved = currentLabels.some(l => l === 'approved' || l === 'aprobado');
+              const hadDenied = currentLabels.filter(l => l === 'denied' || l === 'denegado').length > 1;
+              
+              // Si ya estaba aprobado/denegado, no hacer cambios
+              if (hadApproved || hadDenied) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: context.payload.label.name
+                }).catch(() => {});
+                
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `## ⛔ Permiso Denegado
+
+            @${actor}, no tienes permisos para modificar el estado de aprobación. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.
+
+            **El estado actual del issue no ha sido modificado.**`
+                });
+                return;
+              }
+              
               await github.rest.issues.removeLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 name: context.payload.label.name
               }).catch(() => {});
+              
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -1245,15 +1319,9 @@ jobs:
                 body: `## ⛔ Permiso Denegado
 
             @${actor}, no tienes permisos para denegar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
-                        });
-                        return;
-                      }
-
-                      const hasRfc = (issue.labels || []).some(l => norm(l.name) === 'rfc');
-                      if (!hasRfc) {
-                        console.log('No es un issue RFC, saltando.');
-                        return;
-                      }
+              });
+              return;
+            }
 
                       const hasUser = (issue.labels || []).some(l => norm(l.name) === 'user');
 
