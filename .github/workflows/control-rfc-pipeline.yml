@@ -45,7 +45,6 @@ jobs:
             const repo  = context.repo.repo;
             const body = issue.body || '';
             
-            // Función para normalizar texto
             const norm = (s) =>
               (s ?? '')
                 .toString()
@@ -113,9 +112,8 @@ jobs:
             const PROJECT_TITLE_USER   = (process.env.PROJECT_TITLE_USER || '').trim();
             const PROJECT_URL          = (process.env.PROJECT_URL || '').trim();
 
-            log(`📋 Configuración detectada: ORG=${ORG_LOGIN}, USER=${USER_LOGIN}, Issue=#${issue.number}`);
+            log(`Configuracion detectada: ORG=${ORG_LOGIN}, USER=${USER_LOGIN}, Issue=#${issue.number}`);
 
-            // --- Funciones de Resolución de Proyecto ---
             async function resolveFromUrl(url){
               if (!url) return null;
               let mu = url.match(/https:\/\/github\.com\/users\/([^/]+)\/projects\/(\d+)/i);
@@ -171,54 +169,45 @@ jobs:
             }
 
             async function findProjectV2User() {
-              log('=== Iniciando búsqueda de proyecto de usuarios ===');
-
-              // 1) Buscar primero en la ORGANIZACIÓN (MyCSW)
+              log('=== Iniciando busqueda de proyecto de usuarios ===');
               if (ORG_LOGIN) {
                 if (PROJECT_NUMBER_USER > 0) {
                   log(`Buscando proyecto de usuarios #${PROJECT_NUMBER_USER} en ORG ${ORG_LOGIN}...`);
                   const idOrgNum = await resolveByOrg(PROJECT_NUMBER_USER);
                   if (idOrgNum) {
-                    log(`✅ Proyecto de usuarios encontrado en ORG por número: ${idOrgNum}`);
+                    log(`Proyecto de usuarios encontrado en ORG por numero: ${idOrgNum}`);
                     return idOrgNum;
                   }
                 }
-
                 if (PROJECT_TITLE_USER) {
                   log(`Buscando proyecto de usuarios "${PROJECT_TITLE_USER}" en ORG ${ORG_LOGIN}...`);
                   const idOrgTitle = await resolveByOrg(PROJECT_TITLE_USER);
                   if (idOrgTitle) {
-                    log(`✅ Proyecto de usuarios encontrado en ORG por título: ${idOrgTitle}`);
+                    log(`Proyecto de usuarios encontrado en ORG por titulo: ${idOrgTitle}`);
                     return idOrgTitle;
                   }
                 }
               }
-
-              // 2) Fallback: buscar en proyectos PERSONALES del usuario (por si algún día lo mueves allí)
               if (PROJECT_NUMBER_USER > 0) {
-                log(`No se encontró proyecto de usuarios en ORG. Probando en proyectos personales (#${PROJECT_NUMBER_USER})...`);
+                log(`No se encontro proyecto de usuarios en ORG. Probando en proyectos personales (#${PROJECT_NUMBER_USER})...`);
                 const idUserNum = await resolveByUser(PROJECT_NUMBER_USER);
                 if (idUserNum) {
-                  log(`⚠️ Proyecto de usuarios encontrado en cuenta personal por número: ${idUserNum}`);
+                  log(`Proyecto de usuarios encontrado en cuenta personal por numero: ${idUserNum}`);
                   return idUserNum;
                 }
               }
-
               if (PROJECT_TITLE_USER) {
-                log(`No se encontró proyecto de usuarios por número. Probando en proyectos personales por título "${PROJECT_TITLE_USER}"...`);
+                log(`No se encontro proyecto de usuarios por numero. Probando en proyectos personales por titulo "${PROJECT_TITLE_USER}"...`);
                 const idUserTitle = await resolveByUser(PROJECT_TITLE_USER);
                 if (idUserTitle) {
-                  log(`⚠️ Proyecto de usuarios encontrado en cuenta personal por título: ${idUserTitle}`);
+                  log(`Proyecto de usuarios encontrado en cuenta personal por titulo: ${idUserTitle}`);
                   return idUserTitle;
                 }
               }
-
-              log('❌ Proyecto de usuarios NO encontrado ni en ORG ni en USER');
+              log('Proyecto de usuarios NO encontrado ni en ORG ni en USER');
               return null;
             }
 
-
-            // --- Obtener Issue ID Global ---
             const issueRes = await github.graphql(
               `query($owner:String!, $name:String!, $n:Int!){ repository(owner:$owner, name:$name){ issue(number:$n){ id } } }`,
               { owner, name: repo, n: issue.number }
@@ -263,7 +252,7 @@ jobs:
                 `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){ updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt }}){ clientMutationId } }`,
                 { projectId, itemId, fieldId: field.id, opt: opt.id }
               ).catch(()=>null);
-            }
+            };
 
             const setText = async(projectId,itemId,fieldId,val)=>{
               if(!projectId || !itemId || !fieldId) return;  
@@ -271,7 +260,7 @@ jobs:
                 `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:String!){ updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ text:$val }}){ clientMutationId } }`,
                 { projectId, itemId, fieldId: fieldId, val: val || "" }
               ).catch(()=>null);
-            }
+            };
 
             const setDate = async(projectId,itemId,fieldId,ymd)=>{
               if(!projectId || !itemId || !fieldId || !ymd) return;
@@ -279,14 +268,12 @@ jobs:
                 `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:Date!){ updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ date:$val }}){ clientMutationId } }`,
                 { projectId, itemId, fieldId: fieldId, val: ymd }
               ).catch(()=>null);
-            }
+            };
 
-            // ============================================
-            //                RUTA ISSUE USER
-            // ============================================
+            // RUTA ISSUE USER
             if (hasUserLabel) {
               let projectIdUser = await findProjectV2User();
-              if (!projectIdUser) projectIdUser = await findProjectV2Main(); // Fallback
+              if (!projectIdUser) projectIdUser = await findProjectV2Main();
 
               if (!projectIdUser) { log('No Project found for User Issue'); return; }
               const itemIdUser = await ensureItem(projectIdUser);
@@ -306,31 +293,31 @@ jobs:
               const fReasonU    = byU(['Reason for change','Motivo de cambio']);
               const fRiskU      = byU(['Risk','Riesgo']);
               const fSolicU     = byU(['Solicitor']);
-              const fDeptU      = byU(['Department','Área / Departamento']);
+              const fDeptU      = byU(['Department','Area / Departamento']);
               const fEmailU     = byU(['Contact Email']);
               const fDateAppU   = byU(['Date of application']);
-              const fDescU      = byU(['Description of the requested change','Descripción del cambio solicitado']);
+              const fDescU      = byU(['Description of the requested change','Descripcion del cambio solicitado']);
               const fExplU      = byU(['Explanation of the reason','Motivo del cambio']);
               const fNotesU     = byU(['Additional comments','Observaciones adicionales']);
 
-              const vDept   = grab('Área / Departamento') || grab('Department');
+              const vDept   = grab('Area / Departamento') || grab('Department');
               const vReason = grab('Motivo de cambio'); 
               const vPrior  = grab('Prioridad') || grab('priorityname') || grab('Priority') || '';
-              let   vDesc   = grab('Descripción del cambio solicitado *') || grab('Descripción del cambio solicitado') || grab('Description of the requested change');
+              let   vDesc   = grab('Descripcion del cambio solicitado *') || grab('Descripcion del cambio solicitado') || grab('Description of the requested change');
               let   vExpl   = grab('Motivo del cambio *') || grab('Motivo del cambio') || grab('Explanation of the reason for the change');
               const vNotes  = grab('Observaciones adicionales') || grab('Additional comments');
               const vEmail  = grab('Email') || grab('Contact Email');
 
-              if(!vDesc) vDesc = (grab('Descripción del cambio') || '').trim();
-              if(!vExpl) vExpl = (grab('Explicación del motivo') || '').trim();
+              if(!vDesc) vDesc = (grab('Descripcion del cambio') || '').trim();
+              if(!vExpl) vExpl = (grab('Explicacion del motivo') || '').trim();
 
               const authorLogin = issue.user?.login || context.actor;
               
               function translateReason(reason) {
                 const r = norm(reason);
-                if (r.includes('corrección') || r.includes('error')) return 'Error Correction';
+                if (r.includes('correccion') || r.includes('error')) return 'Error Correction';
                 if (r.includes('mejora funcional')) return 'Functional Improvement';
-                if (r.includes('estético')) return 'Cosmetic Change';
+                if (r.includes('estetico')) return 'Cosmetic Change';
                 if (r.includes('otro')) return 'Other';
                 return r;
               }
@@ -348,16 +335,14 @@ jobs:
                 return med;
               }
 
-              // --- CAMBIO CLAVE: CERRAR COMO NOT PLANNED PERO MANTENER EN BACKLOG ---
               if (context.payload.action === 'opened') {
                 await github.rest.issues.update({
                   owner,
                   repo,
                   issue_number: issue.number,
                   state: 'closed',
-                  state_reason: 'not_planned', // Se cierra como not planned
+                  state_reason: 'not_planned',
                 });
-                // Pero en el Proyecto se pone como Backlog
                 await setSelect(projectIdUser, itemIdUser, fStatusU, 'Backlog');
                 await setSelect(projectIdUser, itemIdUser, fStatusCccU, 'Inbox');
               }
@@ -375,9 +360,7 @@ jobs:
               return;
             }
             
-            // ============================================
-            //           RUTA RFC MAIN (Sin Label User)
-            // ============================================
+            // RUTA RFC MAIN (Sin Label User)
             const projectIdMain = await findProjectV2Main();
             if (!projectIdMain) { log('Project Main not found'); return; }
             const itemIdMain = await ensureItem(projectIdMain);
@@ -397,13 +380,12 @@ jobs:
             const fTipoM      = byM(['Change Type','Tipo de cambio']);
             const fRiesgoM    = byM(['Risk','Riesgo']);
             const fImpactoM   = byM(['Impact','Impacto']);
-            const fPlanM      = byM(['Implementation Plan','Plan de implementación']);
+            const fPlanM      = byM(['Implementation Plan','Plan de implementacion']);
             const fRollbackM  = byM(['RollBack Planning','Rollback Plan','Plan de reversa (rollback)']);
             const fPruebasM   = byM(['Test Planning','Plan de pruebas']);
             const fAprobM     = byM(['Approvers','Aprobadores requeridos']);
             const fSolicM     = byM(['Solicitante','Solicitor','Applicant','Requester']);
 
-            // --- CAMBIO CLAVE: CERRAR COMO NOT PLANNED Y ESTADO NOT PLANNED/INBOX ---
             if (context.payload.action === 'opened') {
               await github.rest.issues.update({
                 owner,
@@ -415,36 +397,35 @@ jobs:
               await setSelect(projectIdMain, itemIdMain, fStatusM, 'Not Planned');
               await setSelect(projectIdMain, itemIdMain, fStatusCccM, 'Inbox');
 
-              // Crear comentario de confirmación
               await github.rest.issues.createComment({
                 owner,
                 repo,
                 issue_number: issue.number,
-                body: `## 📋 Formulario Recibido y Procesado
+                body: `## Formulario Recibido y Procesado
 
-                El formulario ha sido agregado exitosamente al proyecto para revisión.
+            El formulario ha sido agregado exitosamente al proyecto para revision.
 
-                **Estado actual:** Cerrado como "Not Planned" (pendiente de aprobación)
+            **Estado actual:** Cerrado como "Not Planned" (pendiente de aprobacion)
 
-                **Próximos pasos:**
-                - El equipo CCC revisará la solicitud
-                - Para aprobar: Un miembro del equipo CCC agregará la etiqueta \`approved\` (la issue se reabrirá automáticamente)
-                - Para denegar: Se agregará la etiqueta \`denied\`
+            **Proximos pasos:**
+            - El equipo CCC revisara la solicitud
+            - Para aprobar: Un miembro del equipo CCC agregara la etiqueta approved (la issue se reabrira automaticamente)
+            - Para denegar: Se agregara la etiqueta denied
 
-                **Fecha de procesamiento:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
+            **Fecha de procesamiento:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
               });
             }
 
             await setSelect(projectIdMain, itemIdMain, fTipoM,    tipo);
             await setSelect(projectIdMain, itemIdMain, fRiesgoM, riesgo);
             await setText  (projectIdMain, itemIdMain, fImpactoM?.id, grab('Impacto') || grab('Impact'));
-            await setText  (projectIdMain, itemIdMain, fPlanM?.id,    grab('Plan de implementación') || grab('Implementation Plan'));
-            await setText  (projectIdMain, itemIdMain, fRollbackM?.id,grab('Plan de reversa \\(rollback\\)') || grab('RollBack Planning') || grab('Rollback Plan'));
+            await setText  (projectIdMain, itemIdMain, fPlanM?.id,    grab('Plan de implementacion') || grab('Implementation Plan'));
+            await setText  (projectIdMain, itemIdMain, fRollbackM?.id,grab('Plan de reversa (rollback)') || grab('RollBack Planning') || grab('Rollback Plan'));
             await setText  (projectIdMain, itemIdMain, fPruebasM?.id, grab('Plan de pruebas') || grab('Test Planning'));
             await setText  (projectIdMain, itemIdMain, fAprobM?.id,   grab('Aprobadores requeridos') || grab('Approvers'));
             await setText  (projectIdMain, itemIdMain, fSolicM?.id,   grab('Solicitante') || grab('Solicitor') || grab('Applicant') || grab('Requester'));
 
-            log('✅ Proceso RFC Finalizado Correctamente');
+            log('Proceso RFC Finalizado Correctamente');
 
   # --- Job: process-user-approval (Solo para 'user') ---
   process-user-approval:
@@ -1188,234 +1169,234 @@ jobs:
                 **Fecha:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
                             });
 
-                  # --- Job: process-denial (para 'rfc' y 'user') ---
-                  process-denial:
-                    if: |
-                      github.event_name == 'issues' &&
-                      github.event.action == 'labeled' &&
-                      (github.event.label.name == 'denied' ||
-                      github.event.label.name == 'Denegado' ||
-                      github.event.label.name == 'denegado')
-                    runs-on: ubuntu-latest
-                    steps:
-                      - name: Set Status to Not Planned and Denied
-                        uses: actions/github-script@v7
-                        with:
-                          github-token: ${{ secrets.PROJECTS_PAT }}
-                          script: |
-                            const issue = context.payload.issue;
-                            const norm = (s) =>
-                              (s ?? '')
-                                .toString()
-                                .normalize('NFD')
-                                .replace(/\p{Diacritic}/gu, '')
-                                .trim()
-                                .toLowerCase();
+  # --- Job: process-denial (para 'rfc' y 'user') ---
+  process-denial:
+    if: |
+      github.event_name == 'issues' &&
+      github.event.action == 'labeled' &&
+      (github.event.label.name == 'denied' ||
+      github.event.label.name == 'Denegado' ||
+      github.event.label.name == 'denegado')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Status to Not Planned and Denied
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECTS_PAT }}
+          script: |
+            const issue = context.payload.issue;
+            const norm = (s) =>
+              (s ?? '')
+                .toString()
+                .normalize('NFD')
+                .replace(/\p{Diacritic}/gu, '')
+                .trim()
+                .toLowerCase();
 
-                            const actor = context.actor;
-                            const ORG_LOGIN  = process.env.ORG_LOGIN;
+            const actor = context.actor;
+            const ORG_LOGIN  = process.env.ORG_LOGIN;
 
-                            let isCccMember = false;
-                            if (ORG_LOGIN) {
-                              try {
-                                await github.rest.teams.getMembershipForUserInOrg({
-                                  org: ORG_LOGIN,
-                                  team_slug: 'ccc',
-                                  username: actor
-                                });
-                                isCccMember = true;
-                              } catch (error) {
-                                if (error.status === 404) {
-                                  isCccMember = false;
-                                } else {
-                                  console.log(`Error al verificar membresía: ${error.message}`);
-                                  isCccMember = false;
+            let isCccMember = false;
+            if (ORG_LOGIN) {
+              try {
+                await github.rest.teams.getMembershipForUserInOrg({
+                  org: ORG_LOGIN,
+                  team_slug: 'ccc',
+                  username: actor
+                });
+                isCccMember = true;
+              } catch (error) {
+                if (error.status === 404) {
+                  isCccMember = false;
+                } else {
+                  console.log(`Error al verificar membresía: ${error.message}`);
+                  isCccMember = false;
+                }
+              }
+            }
+
+            if (!isCccMember) {
+              console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                name: context.payload.label.name
+              }).catch(() => {});
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## ⛔ Permiso Denegado
+
+            @${actor}, no tienes permisos para denegar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
+                        });
+                        return;
+                      }
+
+                      const hasRfc = (issue.labels || []).some(l => norm(l.name) === 'rfc');
+                      if (!hasRfc) {
+                        console.log('No es un issue RFC, saltando.');
+                        return;
+                      }
+
+                      const hasUser = (issue.labels || []).some(l => norm(l.name) === 'user');
+
+                      const USER_LOGIN = process.env.USER_LOGIN;
+                      const ORG_LOGIN2 = process.env.ORG_LOGIN;
+                      const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
+                      const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+                      
+                      async function getUserProjByNum(n){
+                        const r = await github.graphql(
+                          `query($login:String!){
+                            user(login:$login){
+                              projectsV2(first:50){
+                                nodes{ id number }
+                              }
+                            }
+                          }`,
+                          { login: USER_LOGIN }
+                        ).catch(()=>null);
+                        return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+                      }
+                      
+                      async function getOrgProjByNum(n){
+                        if(!ORG_LOGIN2) return null;
+                        const r = await github.graphql(
+                          `query($login:String!){
+                            organization(login:$login){
+                              projectsV2(first:50){
+                                nodes{ id number }
+                              }
+                            }
+                          }`,
+                          { login: ORG_LOGIN2 }
+                        ).catch(()=>null);
+                        return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+                      }
+
+                      async function findItemId(projectId, issueNumber){
+                        const r = await github.graphql(
+                          `query($projectId:ID!, $q:String!){
+                            node(id:$projectId){
+                              ... on ProjectV2 {
+                                items(first:50, query:$q){
+                                  nodes{
+                                    id
+                                    content{ ... on Issue { number } }
+                                  }
                                 }
                               }
                             }
+                          }`,
+                          { projectId, q: String(issueNumber) }
+                        );
+                        return r?.node?.items?.nodes?.find(n=>n.content?.number===issueNumber)?.id || null;
+                      }
 
-                            if (!isCccMember) {
-                              console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
-                              await github.rest.issues.removeLabel({
-                                owner: context.repo.owner,
-                                repo: context.repo.repo,
-                                issue_number: issue.number,
-                                name: context.payload.label.name
-                              }).catch(() => {});
-                              await github.rest.issues.createComment({
-                                owner: context.repo.owner,
-                                repo: context.repo.repo,
-                                issue_number: issue.number,
-                                body: `## ⛔ Permiso Denegado
+                let projectId = null;
+                if (hasUser) {
+                projectId = await getUserProjByNum(PN_USER);
+                } else {
+                projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+                }
 
-                @${actor}, no tienes permisos para denegar cambios. Solo los miembros del equipo **ccc** pueden aprobar o denegar solicitudes.`
-                              });
-                              return;
-                            }
+                if (!projectId) {
+                console.log('Proyecto (user o main) no encontrado.');
+                return;
+                }
 
-                            const hasRfc = (issue.labels || []).some(l => norm(l.name) === 'rfc');
-                            if (!hasRfc) {
-                              console.log('No es un issue RFC, saltando.');
-                              return;
-                            }
+                const itemId = await findItemId(projectId, issue.number);
+                if (!itemId) {
+                console.log('Item no encontrado en el proyecto.');
+                return;
+                }
 
-                            const hasUser = (issue.labels || []).some(l => norm(l.name) === 'user');
-
-                            const USER_LOGIN = process.env.USER_LOGIN;
-                            const ORG_LOGIN2 = process.env.ORG_LOGIN;
-                            const PN_MAIN    = parseInt(process.env.PROJECT_NUMBER,10);
-                            const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
-                            
-                            async function getUserProjByNum(n){
-                              const r = await github.graphql(
-                                `query($login:String!){
-                                  user(login:$login){
-                                    projectsV2(first:50){
-                                      nodes{ id number }
-                                    }
-                                  }
-                                }`,
-                                { login: USER_LOGIN }
-                              ).catch(()=>null);
-                              return r?.user?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
-                            }
-                            
-                            async function getOrgProjByNum(n){
-                              if(!ORG_LOGIN2) return null;
-                              const r = await github.graphql(
-                                `query($login:String!){
-                                  organization(login:$login){
-                                    projectsV2(first:50){
-                                      nodes{ id number }
-                                    }
-                                  }
-                                }`,
-                                { login: ORG_LOGIN2 }
-                              ).catch(()=>null);
-                              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
-                            }
-
-                            async function findItemId(projectId, issueNumber){
-                              const r = await github.graphql(
-                                `query($projectId:ID!, $q:String!){
-                                  node(id:$projectId){
-                                    ... on ProjectV2 {
-                                      items(first:50, query:$q){
-                                        nodes{
-                                          id
-                                          content{ ... on Issue { number } }
-                                        }
-                                      }
-                                    }
-                                  }
-                                }`,
-                                { projectId, q: String(issueNumber) }
-                              );
-                              return r?.node?.items?.nodes?.find(n=>n.content?.number===issueNumber)?.id || null;
-                            }
-            
-            let projectId = null;
-            if (hasUser) {
-              projectId = await getUserProjByNum(PN_USER);
-            } else {
-              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
-            }
-
-            if (!projectId) {
-              console.log('Proyecto (user o main) no encontrado.');
-              return;
-            }
-            
-            const itemId = await findItemId(projectId, issue.number);
-            if (!itemId) {
-              console.log('Item no encontrado en el proyecto.');
-              return;
-            }
-
-            if (issue.state === 'open') {
-              console.log('El issue está abierto. Cerrando como "not_planned".');
-              await github.rest.issues.update({
+                if (issue.state === 'open') {
+                console.log('El issue está abierto. Cerrando como "not_planned".');
+                await github.rest.issues.update({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
                 state: 'closed',
                 state_reason: 'not_planned'
-              });
-            }
+                });
+                }
 
-            async function setSelect(field,optName){
-              if(!field || !optName) return false;
-              const opts = field.options || [];
-              const normalizedOptName = norm(optName);
-              const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
-              if(!wanted) {
+                async function setSelect(field,optName){
+                if(!field || !optName) return false;
+                const opts = field.options || [];
+                const normalizedOptName = norm(optName);
+                const wanted = opts.find(o=>norm(o.name)===normalizedOptName) || opts.find(o=>norm(o.name).includes(normalizedOptName));
+                if(!wanted) {
                 console.log(`Opción "${normalizedOptName}" no encontrada para el campo "${field.name}"`);
                 return false;
-              }
-              await github.graphql(
+                }
+                await github.graphql(
                 `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
-                  updateProjectV2ItemFieldValue(input:{
-                    projectId:$projectId,
-                    itemId:$itemId,
-                    fieldId:$fieldId,
-                    value:{ singleSelectOptionId:$opt }
-                  }){
-                    clientMutationId
-                  }
+                updateProjectV2ItemFieldValue(input:{
+                  projectId:$projectId,
+                  itemId:$itemId,
+                  fieldId:$fieldId,
+                  value:{ singleSelectOptionId:$opt }
+                }){
+                  clientMutationId
+                }
                 }`,
                 { projectId, itemId, fieldId: field.id, opt: wanted.id }
-              );
-              return true;
-            }
+                );
+                return true;
+                }
 
-            const fields = await github.graphql(
-              `query($projectId:ID!){
+                const fields = await github.graphql(
+                `query($projectId:ID!){
                 node(id:$projectId){
-                  ... on ProjectV2 {
-                    fields(first:50){
-                      nodes{
-                        ... on ProjectV2FieldCommon { id name }
-                        ... on ProjectV2SingleSelectField { id name options{ id name } }
-                      }
+                ... on ProjectV2 {
+                  fields(first:50){
+                    nodes{
+                      ... on ProjectV2FieldCommon { id name }
+                      ... on ProjectV2SingleSelectField { id name options{ id name } }
                     }
                   }
                 }
-              }`,
-              { projectId }
-            );
-            
-            const allFields = fields.node.fields.nodes;
-            
-            const fStatusCcc = allFields.find(f => {
-              const fn = norm(f?.name);
-              return fn === 'status_ccc' || fn === 'status ccc' || fn.includes('status_ccc');
-            });
-            
-            const fStatus = allFields.find(f => norm(f?.name) === 'status');
-            
-            await setSelect(fStatusCcc, 'Denied');
-            await setSelect(fStatus, 'Not Planned');
-            
-            try {
-              await github.rest.issues.removeLabel({
+                }
+                }`,
+                { projectId }
+                );
+
+                const allFields = fields.node.fields.nodes;
+
+                const fStatusCcc = allFields.find(f => {
+                const fn = norm(f?.name);
+                return fn === 'status_ccc' || fn === 'status ccc' || fn.includes('status_ccc');
+                });
+
+                const fStatus = allFields.find(f => norm(f?.name) === 'status');
+
+                await setSelect(fStatusCcc, 'Denied');
+                await setSelect(fStatus, 'Not Planned');
+
+                try {
+                await github.rest.issues.removeLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.payload.issue.number,
                 name: 'approved'
-              });
-            } catch(e) {}
-            
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              body: `## ❌ Solicitud Denegada
+                });
+                } catch(e) {}
 
-            El issue ha sido marcado como denegado y cerrado.
+                await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `## ❌ Solicitud Denegada
 
-            **Estado actualizado:** Not Planned  
-            **Estado CCC:** Denied`
-                        });
+                El issue ha sido marcado como denegado y cerrado.
+
+                **Estado actualizado:** Not Planned  
+                **Estado CCC:** Denied`
+                      });
 
   # --- Job: process-pr-link (bloquea PRs a main sin RFC correcto) ---
   process-pr-link:
@@ -2281,8 +2262,16 @@ jobs:
           github-token: ${{ secrets.PROJECTS_PAT }}
           script: |
             const issue = context.payload.issue;
+            const norm = (s) =>
+              (s ?? '')
+                .toString()
+                .normalize('NFD')
+                .replace(/\p{Diacritic}/gu, '')
+                .trim()
+                .toLowerCase();
+
             const hasUser = (issue.labels || []).some(
-              (l) => (l.name || '').toLowerCase() === 'user'
+              (l) => norm(l.name) === 'user'
             );
 
             const USER_LOGIN = process.env.USER_LOGIN;
@@ -2320,9 +2309,9 @@ jobs:
 
             let projectId = null;
             if (hasUser) {
-              projectId = await getUserProjByNum(PN_USER);
+              projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             } else {
-              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+              projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
             }
             if(!projectId) return;
 
@@ -2360,24 +2349,36 @@ jobs:
               }`,
               { projectId }
             );
-            const norm = (s) =>
-              (s ?? '')
-                .toString()
-                .normalize('NFD')
-                .replace(/\p{Diacritic}/gu, '')
-                .trim()
-                .toLowerCase();
+            
             const status = fields.node.fields.nodes.find(f=>norm(f.name)==='status');
             if(!status) return;
 
+            // LOGICA CORREGIDA:
+            // - Si state_reason es 'completed' -> Done
+            // - Si state_reason es 'not_planned' -> Not Planned
             const reason = context.payload.issue.state_reason;
             let optionName = 'Done';
-            if (reason !== 'completed') {
-               optionName = 'Not Planned';
+            
+            if (reason === 'not_planned') {
+              optionName = 'Not Planned';
             }
 
-            const opt = (status.options||[]).find(o=>norm(o.name)===norm(optionName) || norm(o.name)==='no planeado' || norm(o.name)==='done');
-            if(!opt) return;
+            const opts = status.options || [];
+            let opt = null;
+            
+            if (optionName === 'Done') {
+              opt = opts.find(o => norm(o.name) === 'done') || opts.find(o => norm(o.name).includes('done'));
+            } else {
+              opt = opts.find(o => norm(o.name) === 'not planned') || 
+                    opts.find(o => norm(o.name) === 'notplanned') ||
+                    opts.find(o => norm(o.name) === 'no planeado') ||
+                    opts.find(o => norm(o.name).includes('not planned'));
+            }
+            
+            if(!opt) {
+              console.log(`No se encontro la opcion "${optionName}" en el campo Status`);
+              return;
+            }
 
             await github.graphql(
               `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
@@ -2392,7 +2393,8 @@ jobs:
               }`,
               { projectId, itemId: item.id, fieldId: status.id, opt: opt.id }
             );
-
+            
+            console.log(`Status actualizado a "${optionName}" (reason: ${reason})`);
   # --- Job: remove-project-item-on-delete ---
   remove-project-item-on-delete:
     if: github.event_name == 'issues' && github.event.action == 'deleted'
@@ -2403,8 +2405,16 @@ jobs:
           github-token: ${{ secrets.PROJECTS_PAT }}
           script: |
             const issue = context.payload.issue;
+            const norm = (s) =>
+              (s ?? '')
+                .toString()
+                .normalize('NFD')
+                .replace(/\p{Diacritic}/gu, '')
+                .trim()
+                .toLowerCase();
+
             const hasUser = (issue.labels || []).some(
-              (l) => (l.name || '').toLowerCase() === 'user'
+              (l) => norm(l.name) === 'user'
             );
 
             const USER_LOGIN = process.env.USER_LOGIN;
@@ -2442,9 +2452,9 @@ jobs:
 
             let projectId = null;
             if (hasUser) {
-              projectId = await getUserProjByNum(PN_USER);
+              projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
             } else {
-              projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+              projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
             }
             if(!projectId) return;
 
