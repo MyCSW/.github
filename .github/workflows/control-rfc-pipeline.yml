@@ -29,6 +29,7 @@ env:
 
 jobs:
   # --- Job: process_rfc_on_github ---
+# --- Job: process_rfc_on_github ---
   process_rfc_on_github:
     if: |
       github.event_name == 'issues' &&
@@ -44,6 +45,8 @@ jobs:
             const owner = context.repo.owner;
             const repo  = context.repo.repo;
             const body = issue.body || '';
+            
+            // Función para normalizar texto
             const norm = (s) =>
               (s ?? '')
                 .toString()
@@ -59,14 +62,8 @@ jobs:
             const grab = (label) => {
               const L = escRE(label);
               const variants = [
-                new RegExp(
-                  `^###\\s*${L}\\s*\\n+([\\s\\S]*?)(?=\\n###|\\n$|$)`,
-                  'im'
-                ),
-                new RegExp(
-                  `\\*\\*${L}\\*\\*[\\s\\r\\n]+([\\s\\S]*?)(?=\\n\\*\\*|\\n###|\\n$|$)`,
-                  'i'
-                ),
+                new RegExp(`^###\\s*${L}\\s*\\n+([\\s\\S]*?)(?=\\n###|\\n$|$)`, 'im'),
+                new RegExp(`\\*\\*${L}\\*\\*[\\s\\r\\n]+([\\s\\S]*?)(?=\\n\\*\\*|\\n###|\\n$|$)`, 'i'),
                 new RegExp(`^${L}\\s*:\\s*(.+)$`, 'im')
               ];
               for (const re of variants) {
@@ -79,9 +76,7 @@ jobs:
             const log = (msg, data = null) => {
               const timestamp = new Date().toISOString();
               console.log(`[${timestamp}] [rfc-project] ${msg}`);
-              if (data) {
-                console.log(JSON.stringify(data, null, 2));
-              }
+              if (data) console.log(JSON.stringify(data, null, 2));
             };
 
             const tipo   = (grab('Tipo de cambio') || '').toLowerCase();
@@ -97,6 +92,7 @@ jobs:
 
             const current = new Set((issue.labels || []).map(l => l.name));
             const toAdd = [...wanted].filter(l => !current.has(l));
+            
             if (toAdd.length) {
               await github.rest.issues.addLabels({
                 owner,
@@ -112,225 +108,66 @@ jobs:
 
             const ORG_LOGIN  = (process.env.ORG_LOGIN || '').trim();
             const USER_LOGIN = (process.env.USER_LOGIN || context.repo.owner).trim();
-
             const PROJECT_NUMBER       = parseInt(process.env.PROJECT_NUMBER || '0', 10);
             const PROJECT_TITLE        = (process.env.PROJECT_TITLE || '').trim();
             const PROJECT_NUMBER_USER  = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
             const PROJECT_TITLE_USER   = (process.env.PROJECT_TITLE_USER || '').trim();
             const PROJECT_URL          = (process.env.PROJECT_URL || '').trim();
 
-            log(`📋 Configuración detectada:`);
-            log(`  ORG_LOGIN: ${ORG_LOGIN || 'NO CONFIGURADO'}`);
-            log(`  USER_LOGIN: ${USER_LOGIN}`);
-            log(`  PROJECT_NUMBER: ${PROJECT_NUMBER}`);
-            log(`  PROJECT_TITLE: ${PROJECT_TITLE}`);
-            log(`  PROJECT_URL: ${PROJECT_URL}`);
-            log(`  Issue: #${issue.number}`);
-            log(`  Labels: ${(issue.labels || []).map(l => l.name).join(', ')}`);
+            log(`📋 Configuración detectada: ORG=${ORG_LOGIN}, USER=${USER_LOGIN}, Issue=#${issue.number}`);
 
+            // --- Funciones de Resolución de Proyecto ---
             async function resolveFromUrl(url){
               if (!url) return null;
-
               let mu = url.match(/https:\/\/github\.com\/users\/([^/]+)\/projects\/(\d+)/i);
               if (mu) {
                 const login = mu[1];
                 const num   = parseInt(mu[2],10);
-                log(`🔍 resolveFromUrl (user) login=${login} num=${num}`);
-                const r = await github.graphql(
-                  `query($login:String!){
-                    user(login:$login){
-                      projectsV2(first:100){
-                        nodes{ id number title }
-                      }
-                    }
-                  }`,
-                  { login }
-                ).catch(e => {
-                  log(`❌ GraphQL user error en resolveFromUrl: ${e.message}`);
-                  return null;
-                });
-                const hit = r?.user?.projectsV2?.nodes?.find(n => n.number === num);
-                if (hit) {
-                  log(`✅ Proyecto de usuario encontrado via URL: ${hit.id}`);
-                  return hit.id;
-                }
+                const r = await github.graphql(`query($login:String!){ user(login:$login){ projectsV2(first:20){ nodes{ id number title } } } }`, { login }).catch(()=>null);
+                return r?.user?.projectsV2?.nodes?.find(n => n.number === num)?.id;
               }
-
               mu = url.match(/https:\/\/github\.com\/orgs\/([^/]+)\/projects\/(\d+)/i);
               if (mu) {
                 const login = mu[1];
                 const num   = parseInt(mu[2],10);
-                log(`🔍 resolveFromUrl (org) login=${login} num=${num}`);
-                const r = await github.graphql(
-                  `query($login:String!){
-                    organization(login:$login){
-                      projectsV2(first:100){
-                        nodes{ id number title }
-                      }
-                    }
-                  }`,
-                  { login }
-                ).catch(e => {
-                  log(`❌ GraphQL org error en resolveFromUrl: ${e.message}`);
-                  return null;
-                });
-                const hit = r?.organization?.projectsV2?.nodes?.find(n => n.number === num);
-                if (hit) {
-                  log(`✅ Proyecto de organización encontrado via URL: ${hit.id}`);
-                  return hit.id;
-                }
+                const r = await github.graphql(`query($login:String!){ organization(login:$login){ projectsV2(first:20){ nodes{ id number title } } } }`, { login }).catch(()=>null);
+                return r?.organization?.projectsV2?.nodes?.find(n => n.number === num)?.id;
               }
-
-              log(`⚠️ resolveFromUrl no pudo resolver proyecto desde: ${url}`);
               return null;
             }
 
             async function resolveByUser(numberOrTitle){
-              try {
-                const r = await github.graphql(
-                  `query($login:String!){
-                    user(login:$login){
-                      projectsV2(first:100){
-                        nodes{ id number title }
-                      }
-                    }
-                  }`,
-                  { login: USER_LOGIN }
-                ).catch(e => {
-                  log(`❌ GraphQL user error: ${e.message}`);
-                  return null;
-                });
-                const nodes = r?.user?.projectsV2?.nodes || [];
-                if (typeof numberOrTitle === 'number' && numberOrTitle > 0) {
-                  const found = nodes.find(n => n.number === numberOrTitle);
-                  if (found) {
-                    log(`✅ Proyecto de usuario encontrado por número: ${found.id}`);
-                  }
-                  return found?.id || null;
-                }
-                if (typeof numberOrTitle === 'string' && numberOrTitle) {
-                  const found = nodes.find(n => n.title === numberOrTitle);
-                  if (found) {
-                    log(`✅ Proyecto de usuario encontrado por título: ${found.id}`);
-                  }
-                  return found?.id || null;
-                }
-              } catch(e) {
-                log(`❌ resolveByUser exception: ${e.message}`);
-              }
-              return null;
+              const r = await github.graphql(`query($login:String!){ user(login:$login){ projectsV2(first:20){ nodes{ id number title } } } }`, { login: USER_LOGIN }).catch(()=>null);
+              const nodes = r?.user?.projectsV2?.nodes || [];
+              if (typeof numberOrTitle === 'number') return nodes.find(n => n.number === numberOrTitle)?.id;
+              return nodes.find(n => n.title === numberOrTitle)?.id;
             }
 
             async function resolveByOrg(numberOrTitle) {
-              if (!ORG_LOGIN) {
-                log('⚠️ ORG_LOGIN no está configurado');
-                return null;
-              }
-              
-              try {
-                log(`🔍 Consultando proyectos de la organización ${ORG_LOGIN}...`);
-                const r = await github.graphql(
-                  `query($login:String!){
-                    organization(login:$login){
-                      projectsV2(first:100){
-                        nodes { 
-                          id 
-                          number 
-                          title 
-                        }
-                      }
-                    }
-                  }`,
-                  { login: ORG_LOGIN }
-                ).catch(e => { 
-                  log(`❌ GraphQL org error: ${e.message}`); 
-                  log(`   Esto puede indicar que el PAT no tiene permisos de organización`);
-                  return null; 
-                });
-
-                if (!r || !r.organization) {
-                  log(`❌ No se pudo acceder a la organización ${ORG_LOGIN}`);
-                  log(`   Verifica que el PAT tenga scope 'read:org'`);
-                  return null;
-                }
-
-                const nodes = (r?.organization?.projectsV2?.nodes || []).filter(Boolean);
-                log(`✅ Proyectos encontrados en ORG: ${nodes.length}`);
-                nodes.forEach(n => log(`   - #${n.number}: "${n.title}"`));
-
-                if (typeof numberOrTitle === 'number' && numberOrTitle > 0) {
-                  const found = nodes.find(n => n.number === numberOrTitle);
-                  if (found) {
-                    log(`✅ Match por número: ${found.id}`);
-                  }
-                  return found?.id || null;
-                }
-                
-                if (typeof numberOrTitle === 'string' && numberOrTitle) {
-                  const found = nodes.find(n => n.title === numberOrTitle);
-                  if (found) {
-                    log(`✅ Match por título: ${found.id}`);
-                  }
-                  return found?.id || null;
-                }
-              } catch (e) {
-                log(`❌ resolveByOrg exception: ${e.message}`);
-                log(`   Stack: ${e.stack}`);
-              }
-              return null;
+              if (!ORG_LOGIN) return null;
+              const r = await github.graphql(`query($login:String!){ organization(login:$login){ projectsV2(first:20){ nodes { id number title } } } }`, { login: ORG_LOGIN }).catch(()=>null);
+              const nodes = r?.organization?.projectsV2?.nodes || [];
+              if (typeof numberOrTitle === 'number') return nodes.find(n => n.number === numberOrTitle)?.id;
+              return nodes.find(n => n.title === numberOrTitle)?.id;
             }
 
             async function findProjectV2Main() {
-              log('=== Iniciando búsqueda de proyecto principal ===');
-              
               if (PROJECT_URL) {
-                log(`Intentando resolver desde URL: ${PROJECT_URL}`);
                 const id = await resolveFromUrl(PROJECT_URL);
-                if (id) {
-                  log(`✅ Proyecto encontrado via URL: ${id}`);
-                  return id;
-                }
+                if (id) return id;
               }
-
               if (ORG_LOGIN) {
-                log(`Buscando en organización: ${ORG_LOGIN}`);
-                
                 if (PROJECT_NUMBER > 0) {
-                  log(`Buscando proyecto #${PROJECT_NUMBER} en ORG`);
                   const id = await resolveByOrg(PROJECT_NUMBER);
-                  if (id) {
-                    log(`✅ Proyecto encontrado por número en ORG: ${id}`);
-                    return id;
-                  }
+                  if (id) return id;
                 }
-                
                 if (PROJECT_TITLE) {
-                  log(`Buscando proyecto "${PROJECT_TITLE}" en ORG`);
                   const id = await resolveByOrg(PROJECT_TITLE);
-                  if (id) {
-                    log(`✅ Proyecto encontrado por título en ORG: ${id}`);
-                    return id;
-                  }
+                  if (id) return id;
                 }
               }
-
-              log('No encontrado en ORG, intentando en usuario...');
-              if (PROJECT_NUMBER > 0) {
-                const id = await resolveByUser(PROJECT_NUMBER);
-                if (id) {
-                  log(`⚠️ Proyecto encontrado en USER (fallback): ${id}`);
-                  return id;
-                }
-              }
-              if (PROJECT_TITLE) {
-                const id = await resolveByUser(PROJECT_TITLE);
-                if (id) {
-                  log(`⚠️ Proyecto encontrado en USER (fallback): ${id}`);
-                  return id;
-                }
-              }
-
-              log('❌ Project principal NO encontrado en ORG ni en USER');
+              if (PROJECT_NUMBER > 0) return await resolveByUser(PROJECT_NUMBER);
+              if (PROJECT_TITLE) return await resolveByUser(PROJECT_TITLE);
               return null;
             }
 
@@ -338,118 +175,39 @@ jobs:
               return await resolveByUser(PROJECT_NUMBER_USER) || await resolveByUser(PROJECT_TITLE_USER);
             }
 
+            // --- Obtener Issue ID Global ---
             const issueRes = await github.graphql(
-              `query($owner:String!, $name:String!, $n:Int!){
-                repository(owner:$owner, name:$name){ issue(number:$n){ id number } }
-              }`,
+              `query($owner:String!, $name:String!, $n:Int!){ repository(owner:$owner, name:$name){ issue(number:$n){ id } } }`,
               { owner, name: repo, n: issue.number }
             );
             const issueId = issueRes.repository.issue.id;
-            log(`✅ Issue ID obtenido: ${issueId}`);
-
-            if (ORG_LOGIN && owner !== ORG_LOGIN) {
-              log(`⚠️ Owner del repo (${owner}) no coincide con ORG_LOGIN esperado (${ORG_LOGIN})`);
-            }
 
             async function ensureItem(projectId){
-              log(`🔍 Starting ensureItem for issue #${issue.number}`, {
-                projectId,
-                issueId,
-                issueNumber: issue.number,
-                issueTitle: issue.title
-              });
-
-              if (!projectId) {
-                log('❌ ERROR: projectId is null or undefined');
-                throw new Error('projectId is required but was not provided');
-              }
-              if (!issueId) {
-                log('❌ ERROR: issueId is null or undefined');
-                throw new Error('issueId is required but was not provided');
-              }
-
-              log('Checking if item already exists in project...');
-
+              if (!projectId) return null;
               try {
                 const srch = await github.graphql(
-                  `query($projectId:ID!, $q:String!){
-                    node(id:$projectId){ ... on ProjectV2 {
-                      items(first:100, query:$q){
-                        nodes{
-                          id
-                          content{ ... on Issue { number } }
-                        }
-                      }
-                    } }
-                  }`,
+                  `query($projectId:ID!, $q:String!){ node(id:$projectId){ ... on ProjectV2 { items(first:20, query:$q){ nodes{ id content{ ... on Issue { number } } } } } } }`,
                   { projectId, q: String(issue.number) }
                 );
-
-                let it = srch?.node?.items?.nodes?.find(n=>n.content?.number===issue.number);
-                if (it) {
-                  log(`✅ Item already exists in project with ID: ${it.id}`);
-                  return it.id;
-                }
-
-                log('➕ Item not found in project. Adding new item...');
+                const it = srch?.node?.items?.nodes?.find(n=>n.content?.number===issue.number);
+                if (it) return it.id;
 
                 const add = await github.graphql(
-                  `mutation($projectId:ID!, $contentId:ID!){
-                    addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){
-                      item { id }
-                    }
-                  }`,
+                  `mutation($projectId:ID!, $contentId:ID!){ addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){ item { id } } }`,
                   { projectId, contentId: issueId }
                 );
-
-                const itemId = add?.addProjectV2ItemById?.item?.id;
-                if (itemId) {
-                  log(`✅ SUCCESS: Item added to project with ID: ${itemId}`);
-                  return itemId;
-                } else {
-                  log('❌ Respuesta de addProjectV2ItemById no contiene item.id');
-                  return null;
-                }
-
-              } catch(error) {
-                log('❌ CRITICAL ERROR in ensureItem:', {
-                  issueNumber: issue.number,
-                  issueTitle: issue.title,
-                  projectId,
-                  issueId,
-                  errorMessage: error.message,
-                  errorStatus: error.status,
-                  errorType: error.constructor.name,
-                  errorResponse: error.response?.data,
-                  graphqlErrors: error.errors
-                });
-
-                if (error.message.includes('Resource not accessible by integration') ||
-                    error.message.includes('Must have write access')) {
-                  log('⚠️ PERMISSIONS ERROR: El PAT necesita scope "project" con write access');
-                  log('⚠️ Verifica que el token tenga permisos en: https://github.com/settings/tokens');
-                }
-
-                throw new Error(`Failed to add issue #${issue.number} to project: ${error.message}`);
+                return add?.addProjectV2ItemById?.item?.id;
+              } catch(e) {
+                log(`Error en ensureItem: ${e.message}`);
+                return null;
               }
             }
 
             async function getFields(projectId){
               const r = await github.graphql(
-                `query($projectId:ID!){
-                  node(id:$projectId){
-                    ... on ProjectV2 {
-                      fields(first:100){
-                        nodes{
-                          ... on ProjectV2FieldCommon { id name dataType }
-                          ... on ProjectV2SingleSelectField { id name options { id name } }
-                        }
-                      }
-                    }
-                  }
-                }`,
+                `query($projectId:ID!){ node(id:$projectId){ ... on ProjectV2 { fields(first:50){ nodes{ ... on ProjectV2FieldCommon { id name dataType } ... on ProjectV2SingleSelectField { id name options { id name } } } } } } }`,
                 { projectId }
-              ).catch(()=>null);
+              );
               return r?.node?.fields?.nodes || [];
             }
 
@@ -457,21 +215,9 @@ jobs:
               if(!projectId || !itemId || !field || !optName) return;
               const opts = field.options || [];
               const opt = opts.find(o=>norm(o.name)===norm(optName)) || opts.find(o=>norm(o.name).includes(norm(optName)));
-              if(!opt) {
-                console.log(`Opción "${optName}" no encontrada en el campo "${field?.name}"`);
-                return;
-              }
+              if(!opt) return;
               await github.graphql(
-                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
-                  updateProjectV2ItemFieldValue(input:{
-                    projectId:$projectId,
-                    itemId:$itemId,
-                    fieldId:$fieldId,
-                    value:{ singleSelectOptionId:$opt }
-                  }){
-                    clientMutationId
-                  }
-                }`,
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){ updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ singleSelectOptionId:$opt }}){ clientMutationId } }`,
                 { projectId, itemId, fieldId: field.id, opt: opt.id }
               ).catch(()=>null);
             }
@@ -479,16 +225,7 @@ jobs:
             const setText = async(projectId,itemId,fieldId,val)=>{
               if(!projectId || !itemId || !fieldId) return;  
               await github.graphql(
-                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:String!){
-                  updateProjectV2ItemFieldValue(input:{
-                    projectId:$projectId,
-                    itemId:$itemId,
-                    fieldId:$fieldId,
-                    value:{ text:$val }
-                  }){
-                    clientMutationId
-                  }
-                }`,
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:String!){ updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ text:$val }}){ clientMutationId } }`,
                 { projectId, itemId, fieldId: fieldId, val: val || "" }
               ).catch(()=>null);
             }
@@ -496,36 +233,21 @@ jobs:
             const setDate = async(projectId,itemId,fieldId,ymd)=>{
               if(!projectId || !itemId || !fieldId || !ymd) return;
               await github.graphql(
-                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:Date!){
-                  updateProjectV2ItemFieldValue(input:{
-                    projectId:$projectId,
-                    itemId:$itemId,
-                    fieldId:$fieldId,
-                    value:{ date:$val }
-                  }){
-                    clientMutationId
-                  }
-                }`,
+                `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:Date!){ updateProjectV2ItemFieldValue(input:{projectId:$projectId, itemId:$itemId, fieldId:$fieldId, value:{ date:$val }}){ clientMutationId } }`,
                 { projectId, itemId, fieldId: fieldId, val: ymd }
               ).catch(()=>null);
             }
 
-            // --- RUTA ISSUE USER ---
+            // ============================================
+            //                RUTA ISSUE USER
+            // ============================================
             if (hasUserLabel) {
               let projectIdUser = await findProjectV2User();
+              if (!projectIdUser) projectIdUser = await findProjectV2Main(); // Fallback
 
-              if (!projectIdUser) {
-                log('⚠️ Project de usuario no encontrado o sin permisos. Intentando usar el proyecto principal como fallback...');
-                projectIdUser = await findProjectV2Main();
-              }
-
-              if (!projectIdUser) {
-                log('❌ No se pudo resolver ningún Project (usuario ni principal) para el formulario de usuario');
-                return;
-              }
-
+              if (!projectIdUser) { log('No Project found for User Issue'); return; }
               const itemIdUser = await ensureItem(projectIdUser);
-              if (!itemIdUser) { console.log('No se pudo crear/encontrar item en Project usuarios/principal'); return }
+              if (!itemIdUser) return;
 
               const fieldsUser = await getFields(projectIdUser);
               const byU = (names) => {
@@ -541,18 +263,18 @@ jobs:
               const fReasonU    = byU(['Reason for change','Motivo de cambio']);
               const fRiskU      = byU(['Risk','Riesgo']);
               const fSolicU     = byU(['Solicitor']);
-              const fDeptU      = byU(['Department','Área / Departamento','Area / Departamento']);
+              const fDeptU      = byU(['Department','Área / Departamento']);
               const fEmailU     = byU(['Contact Email']);
               const fDateAppU   = byU(['Date of application']);
-              const fDescU      = byU(['Description of the requested change','Description of the request','Descripción del cambio solicitado']);
-              const fExplU      = byU(['Explanation of the reason for the change','Explanation of the reason','Motivo del cambio']);
+              const fDescU      = byU(['Description of the requested change','Descripción del cambio solicitado']);
+              const fExplU      = byU(['Explanation of the reason','Motivo del cambio']);
               const fNotesU     = byU(['Additional comments','Observaciones adicionales']);
 
               const vDept   = grab('Área / Departamento') || grab('Department');
               const vReason = grab('Motivo de cambio'); 
               const vPrior  = grab('Prioridad') || grab('priorityname') || grab('Priority') || '';
-              let   vDesc   = grab('Descripción del cambio solicitado *') || grab('Descripción del cambio solicitado') || grab('Description of the requested change') || grab('Description of the request');
-              let   vExpl   = grab('Motivo del cambio *') || grab('Motivo del cambio') || grab('Explanation of the reason for the change') || grab('Explanation of the reason');
+              let   vDesc   = grab('Descripción del cambio solicitado *') || grab('Descripción del cambio solicitado') || grab('Description of the requested change');
+              let   vExpl   = grab('Motivo del cambio *') || grab('Motivo del cambio') || grab('Explanation of the reason for the change');
               const vNotes  = grab('Observaciones adicionales') || grab('Additional comments');
               const vEmail  = grab('Email') || grab('Contact Email');
 
@@ -560,13 +282,6 @@ jobs:
               if(!vExpl) vExpl = (grab('Explicación del motivo') || '').trim();
 
               const authorLogin = issue.user?.login || context.actor;
-              const authorInfo  = await github.graphql(
-                `query($login:String!){
-                  user(login:$login){ name }
-                }`,
-                { login: authorLogin }
-              ).catch(()=>null);
-              const authorName  = (authorInfo?.user?.name || authorLogin).trim();
               
               function translateReason(reason) {
                 const r = norm(reason);
@@ -583,30 +298,32 @@ jobs:
                 const names = opts.map(n => norm(n));
                 const high  = opts[names.findIndex(n => /high|alto/.test(n))]   ?? opts.find(o=>/high|alto/i.test(o))   ?? 'High';
                 const med   = opts[names.findIndex(n => /medium|medio/.test(n))]?? opts.find(o=>/medium|medio/i.test(o))?? 'Medium';
-                const low   = opts[names.findIndex(n => /low|bajo/.test(n))]   ?? opts.find(o=>/low|bajo/i.test(o))   ?? 'Low';
+                const low   = opts[names.findIndex(n => /low|bajo/.test(n))]    ?? opts.find(o=>/low|bajo/i.test(o))    ?? 'Low';
                 const v = norm(priority);
                 if (/(crit|urg|alta|alto|high)/.test(v))   return high;
-                if (/(med|medio|media|medium|normal)/.test(v)) return med;
                 if (/(baj|baja|low)/.test(v))              return low;
                 return med;
               }
 
+              // --- CAMBIO CLAVE: CERRAR COMO NOT PLANNED PERO MANTENER EN BACKLOG ---
               if (context.payload.action === 'opened') {
                 await github.rest.issues.update({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
+                  owner,
+                  repo,
                   issue_number: issue.number,
-                  state: 'open',
+                  state: 'closed',
+                  state_reason: 'not_planned', // Se cierra como not planned
                 });
+                // Pero en el Proyecto se pone como Backlog
                 await setSelect(projectIdUser, itemIdUser, fStatusU, 'Backlog');
                 await setSelect(projectIdUser, itemIdUser, fStatusCccU, 'Inbox');
               }
 
-              await setText (projectIdUser, itemIdUser, fSolicU?.id,   authorName);
+              await setText (projectIdUser, itemIdUser, fSolicU?.id,   authorLogin);
               await setText (projectIdUser, itemIdUser, fEmailU?.id,   vEmail || '');
               await setDate (projectIdUser, itemIdUser, fDateAppU?.id, new Date().toISOString().slice(0,10));
-              await setSelect(projectIdUser, itemIdUser, fReasonU,    translatedReason);
-              await setSelect(projectIdUser, itemIdUser, fRiskU,      pickRiskFromPriority(vPrior, fRiskU));
+              await setSelect(projectIdUser, itemIdUser, fReasonU,     translatedReason);
+              await setSelect(projectIdUser, itemIdUser, fRiskU,       pickRiskFromPriority(vPrior, fRiskU));
               await setText (projectIdUser, itemIdUser, fDeptU?.id,    vDept);
               await setText (projectIdUser, itemIdUser, fDescU?.id,    vDesc);
               await setText (projectIdUser, itemIdUser, fExplU?.id,    vExpl);
@@ -615,13 +332,15 @@ jobs:
               return;
             }
             
-            // --- RUTA RFC MAIN (sin label user) ---
-
+            // ============================================
+            //           RUTA RFC MAIN (Sin Label User)
+            // ============================================
             const projectIdMain = await findProjectV2Main();
-            if (!projectIdMain) { console.log('Project principal no encontrado o sin permisos'); return }
+            if (!projectIdMain) { log('Project Main not found'); return; }
             const itemIdMain = await ensureItem(projectIdMain);
-            if (!itemIdMain) { console.log('No se pudo crear/encontrar item en Project principal'); return }
+            if (!itemIdMain) return;
             const fieldsMain = await getFields(projectIdMain);
+            
             const byM = (names)=> {
               const want = names.map(n => norm(n));
               return fieldsMain.find(f => {
@@ -641,19 +360,39 @@ jobs:
             const fAprobM     = byM(['Approvers','Aprobadores requeridos']);
             const fSolicM     = byM(['Solicitante','Solicitor','Applicant','Requester']);
 
+            // --- CAMBIO CLAVE: CERRAR COMO NOT PLANNED Y ESTADO NOT PLANNED/INBOX ---
             if (context.payload.action === 'opened') {
               await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
+                owner,
+                repo,
                 issue_number: issue.number,
                 state: 'closed',
                 state_reason: 'not_planned',
               });
               await setSelect(projectIdMain, itemIdMain, fStatusM, 'Not Planned');
               await setSelect(projectIdMain, itemIdMain, fStatusCccM, 'Inbox');
+
+              // Crear comentario de confirmación
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issue.number,
+                body: `## 📋 Formulario Recibido y Procesado
+
+                El formulario ha sido agregado exitosamente al proyecto para revisión.
+
+                **Estado actual:** Cerrado como "Not Planned" (pendiente de aprobación)
+
+                **Próximos pasos:**
+                - El equipo CCC revisará la solicitud
+                - Para aprobar: Un miembro del equipo CCC agregará la etiqueta \`approved\` (la issue se reabrirá automáticamente)
+                - Para denegar: Se agregará la etiqueta \`denied\`
+
+                **Fecha de procesamiento:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
+              });
             }
 
-            await setSelect(projectIdMain, itemIdMain, fTipoM,   tipo);
+            await setSelect(projectIdMain, itemIdMain, fTipoM,    tipo);
             await setSelect(projectIdMain, itemIdMain, fRiesgoM, riesgo);
             await setText  (projectIdMain, itemIdMain, fImpactoM?.id, grab('Impacto') || grab('Impact'));
             await setText  (projectIdMain, itemIdMain, fPlanM?.id,    grab('Plan de implementación') || grab('Implementation Plan'));
@@ -662,27 +401,7 @@ jobs:
             await setText  (projectIdMain, itemIdMain, fAprobM?.id,   grab('Aprobadores requeridos') || grab('Approvers'));
             await setText  (projectIdMain, itemIdMain, fSolicM?.id,   grab('Solicitante') || grab('Solicitor') || grab('Applicant') || grab('Requester'));
 
-            if (context.payload.action === 'opened') {
-              log('✅ Formulario procesado y agregado al proyecto exitosamente');
-
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: issue.number,
-                body: `## 📋 Formulario Recibido y Procesado
-
-              El formulario ha sido agregado exitosamente al proyecto para revisión.
-
-              **Estado actual:** Cerrado como "Not Planned" (pendiente de aprobación)
-
-              **Próximos pasos:**
-              - El equipo CCC revisará la solicitud
-              - Para aprobar: Un miembro del equipo CCC agregará la etiqueta \`approved\` (la issue se reabrirá automáticamente)
-              - Para denegar: Se agregará la etiqueta \`denied\`
-
-              **Fecha de procesamiento:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
-                            });
-                          }
+            log('✅ Proceso RFC Finalizado Correctamente');
 
   # --- Job: process-user-approval (Solo para 'user') ---
   process-user-approval:
