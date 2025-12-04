@@ -2031,6 +2031,21 @@ jobs:
               ).catch(() => null);
               return r?.user?.projectsV2?.nodes?.find((x) => x.number === n)?.id || null;
             }
+            
+            async function getOrgProjByNum(n) {
+              if (!ORG_LOGIN) return null;
+              const r = await github.graphql(
+                `query($login:String!){
+                  organization(login:$login){
+                    projectsV2(first:50){
+                      nodes{ id number }
+                    }
+                  }
+                }`,
+                { login: ORG_LOGIN }
+              ).catch(() => null);
+              return r?.organization?.projectsV2?.nodes?.find((x) => x.number === n)?.id || null;
+            }
 
             async function findItemId(projectId, issueNumber) {
               const r = await github.graphql(
@@ -2114,7 +2129,7 @@ jobs:
                 return;
               }
 
-              const projectId = await getUserProjByNum(PN_USER);
+              const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
               if (!projectId) {
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
@@ -2241,31 +2256,246 @@ jobs:
                             return;
                           }
 
-                          if (commentBody === '/actualizar') {
-                            if (!isCccMember) {
-                              await github.rest.issues.createComment({
-                                owner: context.repo.owner,
-                                repo: context.repo.repo,
-                                issue_number: issue.number,
-                                body: `@${actor} No tienes permisos para ejecutar este comando. Solo miembros del equipo CCC.`
-                              });
-                              return;
-                            }
+                if (commentBody.startsWith('/actualizar')) {
+                  if (!isCccMember) {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issue.number,
+                      body: `@${actor} No tienes permisos para ejecutar este comando. Solo miembros del equipo CCC.`
+                    });
+                    return;
+                  }
 
-                            await github.rest.issues.createComment({
-                              owner: context.repo.owner,
-                              repo: context.repo.repo,
-                              issue_number: issue.number,
-                              body: `## 🔄 Actualización del Proyecto
+                  const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
+                  if (!projectId) {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issue.number,
+                      body: '❌ No se pudo encontrar el proyecto de usuario.'
+                    });
+                    return;
+                  }
 
-              El comando \`/actualizar\` permite sincronizar información desde este issue hacia el proyecto.
+                  const itemId = await findItemId(projectId, issue.number);
+                  if (!itemId) {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issue.number,
+                      body: '❌ Este issue no está en el proyecto.'
+                    });
+                    return;
+                  }
 
-              **Próximamente disponible**: Esta funcionalidad está en desarrollo.
+                  // Buscar el comentario con los datos del formulario CCC
+                  const allComments = await github.rest.issues.listComments({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number
+                  });
 
-              Por ahora, por favor actualiza los campos manualmente en el proyecto y usa \`/verificar\` para confirmar.`
-                            });
-                            return;
-                          }
+                  // Buscar el comentario más reciente que tenga datos del formulario
+                  let formData = null;
+                  for (let i = allComments.data.length - 1; i >= 0; i--) {
+                    const c = allComments.data[i];
+                    const body = c.body || '';
+                    if (body.includes('Change Type') && body.includes('Impact') && body.includes('Implementation Plan')) {
+                      formData = body;
+                      break;
+                    }
+                  }
+
+                  if (!formData) {
+                    await github.rest.issues.createComment({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      issue_number: issue.number,
+                      body: `## ❌ No se encontró información para actualizar
+
+                Por favor, primero completa el formulario CCC en un comentario con el siguiente formato:
+
+                \`\`\`
+                Change Type: estandar
+
+                Impact: Descripción del impacto
+
+                Implementation Plan: Pasos detallados
+
+                RollBack Planning: Plan de reversión
+
+                Test Planning: Estrategia de pruebas
+
+                Approvers: @usuario1, @usuario2
+
+                Start date: 2025-12-05
+
+                Target date: 2025-12-07
+                \`\`\`
+
+                Luego ejecuta \`/actualizar\` de nuevo.`
+                    });
+                    return;
+                  }
+
+                // Función para extraer valores del comentario
+                function extractValue(text, fieldName) {
+                  const patterns = [
+                    new RegExp(`${fieldName}:\\s*(.+?)(?=\\n[A-Z]|\\n\\n|$)`, 'is'),
+                    new RegExp(`${fieldName}\\s*:\\s*(.+?)(?=\\n[A-Z]|\\n\\n|$)`, 'is'),
+                    new RegExp(`\\*\\*${fieldName}\\*\\*[:\\s]*(.+?)(?=\\n\\*\\*|\\n[A-Z]|$)`, 'is')
+                  ];
+                  for (const re of patterns) {
+                    const m = text.match(re);
+                    if (m && m[1]) return m[1].trim();
+                  }
+                  return null;
+                }
+
+                const vChangeType = extractValue(formData, 'Change Type') || extractValue(formData, 'Tipo de cambio');
+                const vImpact = extractValue(formData, 'Impact') || extractValue(formData, 'Impacto');
+                const vPlan = extractValue(formData, 'Implementation Plan') || extractValue(formData, 'Plan de implementación');
+                const vRollback = extractValue(formData, 'RollBack Planning') || extractValue(formData, 'Rollback Plan') || extractValue(formData, 'Plan de reversión');
+                const vTest = extractValue(formData, 'Test Planning') || extractValue(formData, 'Plan de pruebas');
+                const vApprovers = extractValue(formData, 'Approvers') || extractValue(formData, 'Aprobadores');
+                const vStart = extractValue(formData, 'Start date') || extractValue(formData, 'Fecha de inicio');
+                const vTarget = extractValue(formData, 'Target date') || extractValue(formData, 'Fecha objetivo');
+
+                // Obtener campos del proyecto
+                const fields = await getFields(projectId);
+                
+                const fChangeType = by(fields, ['Change Type', 'Tipo de cambio']);
+                const fImpact = by(fields, ['Impact', 'Impacto']);
+                const fPlan = by(fields, ['Implementation Plan', 'Plan de implementación']);
+                const fRollback = by(fields, ['RollBack Planning', 'Rollback Plan']);
+                const fTest = by(fields, ['Test Planning', 'Plan de pruebas']);
+                const fApprovers = by(fields, ['Approvers', 'Aprobadores']);
+                const fStart = by(fields, ['Start date', 'Fecha de inicio']);
+                const fTarget = by(fields, ['Target date', 'Fecha objetivo']);
+
+                // Funciones para actualizar campos
+                async function setSelectField(field, optName) {
+                  if (!field || !optName) return false;
+                  const opts = field.options || [];
+                  const wanted = opts.find(o => norm(o.name) === norm(optName)) || opts.find(o => norm(o.name).includes(norm(optName)));
+                  if (!wanted) return false;
+                  await github.graphql(
+                    `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $opt:String!){
+                      updateProjectV2ItemFieldValue(input:{
+                        projectId:$projectId,
+                        itemId:$itemId,
+                        fieldId:$fieldId,
+                        value:{ singleSelectOptionId:$opt }
+                      }){
+                        clientMutationId
+                      }
+                    }`,
+                    { projectId, itemId, fieldId: field.id, opt: wanted.id }
+                  ).catch(() => null);
+                  return true;
+                }
+
+                async function setTextField(fieldId, val) {
+                  if (!fieldId || !val) return false;
+                  await github.graphql(
+                    `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:String!){
+                      updateProjectV2ItemFieldValue(input:{
+                        projectId:$projectId,
+                        itemId:$itemId,
+                        fieldId:$fieldId,
+                        value:{ text:$val }
+                      }){
+                        clientMutationId
+                      }
+                    }`,
+                    { projectId, itemId, fieldId, val }
+                  ).catch(() => null);
+                  return true;
+                }
+
+                async function setDateField(fieldId, dateStr) {
+                  if (!fieldId || !dateStr) return false;
+                  // Extraer fecha en formato YYYY-MM-DD
+                  const dateMatch = dateStr.match(/(\d{4}-\d{2}-\d{2})/);
+                  if (!dateMatch) return false;
+                  await github.graphql(
+                    `mutation($projectId:ID!, $itemId:ID!, $fieldId:ID!, $val:Date!){
+                      updateProjectV2ItemFieldValue(input:{
+                        projectId:$projectId,
+                        itemId:$itemId,
+                        fieldId:$fieldId,
+                        value:{ date:$val }
+                      }){
+                        clientMutationId
+                      }
+                    }`,
+                    { projectId, itemId, fieldId, val: dateMatch[1] }
+                  ).catch(() => null);
+                  return true;
+                }
+
+                // Actualizar campos
+                const updated = [];
+                const failed = [];
+
+                if (vChangeType && fChangeType) {
+                  if (await setSelectField(fChangeType, vChangeType)) updated.push('Change Type');
+                  else failed.push('Change Type');
+                }
+                if (vImpact && fImpact?.id) {
+                  if (await setTextField(fImpact.id, vImpact)) updated.push('Impact');
+                  else failed.push('Impact');
+                }
+                if (vPlan && fPlan?.id) {
+                  if (await setTextField(fPlan.id, vPlan)) updated.push('Implementation Plan');
+                  else failed.push('Implementation Plan');
+                }
+                if (vRollback && fRollback?.id) {
+                  if (await setTextField(fRollback.id, vRollback)) updated.push('RollBack Planning');
+                  else failed.push('RollBack Planning');
+                }
+                if (vTest && fTest?.id) {
+                  if (await setTextField(fTest.id, vTest)) updated.push('Test Planning');
+                  else failed.push('Test Planning');
+                }
+                if (vApprovers && fApprovers?.id) {
+                  if (await setTextField(fApprovers.id, vApprovers)) updated.push('Approvers');
+                  else failed.push('Approvers');
+                }
+                if (vStart && fStart?.id) {
+                  if (await setDateField(fStart.id, vStart)) updated.push('Start date');
+                  else failed.push('Start date');
+                }
+                if (vTarget && fTarget?.id) {
+                  if (await setDateField(fTarget.id, vTarget)) updated.push('Target date');
+                  else failed.push('Target date');
+                }
+
+                let responseBody = `## 🔄 Actualización del Proyecto\n\n`;
+                
+                if (updated.length > 0) {
+                  responseBody += `### ✅ Campos actualizados:\n${updated.map(f => '- ' + f).join('\n')}\n\n`;
+                }
+                
+                if (failed.length > 0) {
+                  responseBody += `### ⚠️ Campos no actualizados:\n${failed.map(f => '- ' + f).join('\n')}\n\n`;
+                }
+
+                if (updated.length === 0 && failed.length === 0) {
+                  responseBody += `No se encontraron campos para actualizar en el comentario.\n\n`;
+                }
+
+                responseBody += `\nUsa \`/verificar\` para confirmar que todos los campos están completos.`;
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: responseBody
+                });
+                return;
+              }
 
   # --- Job: set-project-status-on-close ---
   set-project-status-on-close:
