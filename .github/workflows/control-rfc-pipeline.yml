@@ -606,7 +606,7 @@ jobs:
                             return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
                           }
 
-                          const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
+                          const projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_USER);
                           if(!projectId) {
                             console.log('Proyecto de usuario no encontrado.');
                             return;
@@ -1162,7 +1162,7 @@ jobs:
                               return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
                             }
 
-                            const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
+                            const projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_USER);
                             if(!projectId) {
                               console.log('Proyecto de usuario no encontrado.');
                               return;
@@ -1380,7 +1380,7 @@ jobs:
 
                 let projectId = null;
                 if (hasUser) {
-                  projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
+                  projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_USER);
                 } else {
                   projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
                 }
