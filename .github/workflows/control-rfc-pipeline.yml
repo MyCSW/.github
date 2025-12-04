@@ -28,7 +28,6 @@ env:
   PROJECT_TITLE_USER: Formularios-Usuario_Final-ORG
 
 jobs:
-  # --- Job: process_rfc_on_github ---
 # --- Job: process_rfc_on_github ---
   process_rfc_on_github:
     if: |
@@ -172,8 +171,52 @@ jobs:
             }
 
             async function findProjectV2User() {
-              return await resolveByUser(PROJECT_NUMBER_USER) || await resolveByUser(PROJECT_TITLE_USER);
+              log('=== Iniciando búsqueda de proyecto de usuarios ===');
+
+              // 1) Buscar primero en la ORGANIZACIÓN (MyCSW)
+              if (ORG_LOGIN) {
+                if (PROJECT_NUMBER_USER > 0) {
+                  log(`Buscando proyecto de usuarios #${PROJECT_NUMBER_USER} en ORG ${ORG_LOGIN}...`);
+                  const idOrgNum = await resolveByOrg(PROJECT_NUMBER_USER);
+                  if (idOrgNum) {
+                    log(`✅ Proyecto de usuarios encontrado en ORG por número: ${idOrgNum}`);
+                    return idOrgNum;
+                  }
+                }
+
+                if (PROJECT_TITLE_USER) {
+                  log(`Buscando proyecto de usuarios "${PROJECT_TITLE_USER}" en ORG ${ORG_LOGIN}...`);
+                  const idOrgTitle = await resolveByOrg(PROJECT_TITLE_USER);
+                  if (idOrgTitle) {
+                    log(`✅ Proyecto de usuarios encontrado en ORG por título: ${idOrgTitle}`);
+                    return idOrgTitle;
+                  }
+                }
+              }
+
+              // 2) Fallback: buscar en proyectos PERSONALES del usuario (por si algún día lo mueves allí)
+              if (PROJECT_NUMBER_USER > 0) {
+                log(`No se encontró proyecto de usuarios en ORG. Probando en proyectos personales (#${PROJECT_NUMBER_USER})...`);
+                const idUserNum = await resolveByUser(PROJECT_NUMBER_USER);
+                if (idUserNum) {
+                  log(`⚠️ Proyecto de usuarios encontrado en cuenta personal por número: ${idUserNum}`);
+                  return idUserNum;
+                }
+              }
+
+              if (PROJECT_TITLE_USER) {
+                log(`No se encontró proyecto de usuarios por número. Probando en proyectos personales por título "${PROJECT_TITLE_USER}"...`);
+                const idUserTitle = await resolveByUser(PROJECT_TITLE_USER);
+                if (idUserTitle) {
+                  log(`⚠️ Proyecto de usuarios encontrado en cuenta personal por título: ${idUserTitle}`);
+                  return idUserTitle;
+                }
+              }
+
+              log('❌ Proyecto de usuarios NO encontrado ni en ORG ni en USER');
+              return null;
             }
+
 
             // --- Obtener Issue ID Global ---
             const issueRes = await github.graphql(
