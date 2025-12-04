@@ -531,10 +531,24 @@ jobs:
 
             // --- RUTA ISSUE USER ---
             if (hasUserLabel) {
-              const projectIdUser = await findProjectV2User();
-              if (!projectIdUser) { console.log('Project usuarios no encontrado o sin permisos'); return }
+              // Intento principal: proyecto de usuario
+              let projectIdUser = await findProjectV2User();
+
+              if (!projectIdUser) {
+                log('⚠️ Project de usuario no encontrado o sin permisos. Intentando usar el proyecto principal como fallback...');
+                projectIdUser = await findProjectV2Main();
+              }
+
+              if (!projectIdUser) {
+                log('❌ No se pudo resolver ningún Project (usuario ni principal) para el formulario de usuario');
+                return;
+              }
+
               const itemIdUser = await ensureItem(projectIdUser);
-              if (!itemIdUser) { console.log('No se pudo crear/encontrar item en Project usuarios'); return }
+              if (!itemIdUser) {
+                log('❌ No se pudo crear/encontrar item en Project usuarios/principal');
+                return;
+              }
 
               const fieldsUser = await getFields(projectIdUser);
               const byU = (names) => {
@@ -543,11 +557,11 @@ jobs:
                   const fn = norm(f?.name);
                   return want.some(w => fn === w || fn.includes(w));
                 });
-              }
+              };
 
               const fStatusU    = byU(['Status']);
               const fStatusCccU = byU(['Status_CCC','Status CCC','status_ccc']);
-              const fReasonU    = byU(['Reason for change','Motivo de cambio']); // Campo de Select
+              const fReasonU    = byU(['Reason for change','Motivo de cambio']);
               const fRiskU      = byU(['Risk','Riesgo']);
               const fSolicU     = byU(['Solicitor']);
               const fDeptU      = byU(['Department','Área / Departamento','Area / Departamento']);
@@ -556,8 +570,6 @@ jobs:
               const fDescU      = byU(['Description of the requested change','Description of the request','Descripción del cambio solicitado']);
               const fExplU      = byU(['Explanation of the reason for the change','Explanation of the reason','Motivo del cambio']);
               const fNotesU     = byU(['Additional comments','Observaciones adicionales']);
-
-              // --- INICIO DE CAMBIOS USER ---
 
               const vDept   = grab('Área / Departamento') || grab('Department');
               const vReason = grab('Motivo de cambio'); 
@@ -622,125 +634,126 @@ jobs:
               await setText (projectIdUser, itemIdUser, fDescU?.id,    vDesc);
               await setText (projectIdUser, itemIdUser, fExplU?.id,    vExpl);
               await setText (projectIdUser, itemIdUser, fNotesU?.id,   vNotes);
-              
+
               return;
             }
-            
-            // --- RUTA RFC MAIN (sin label user) ---
 
-            const projectIdMain = await findProjectV2Main();
-            if (!projectIdMain) { console.log('Project principal no encontrado o sin permisos'); return }
-            const itemIdMain = await ensureItem(projectIdMain);
-            if (!itemIdMain) { console.log('No se pudo crear/encontrar item en Project principal'); return }
-            const fieldsMain = await getFields(projectIdMain);
-            const byM = (names)=> {
-              const want = names.map(n => norm(n));
-              return fieldsMain.find(f => {
-                const fn = norm(f?.name);
-                return want.some(w => fn === w || fn.includes(w));
-              });
-            };
+                        
+                        // --- RUTA RFC MAIN (sin label user) ---
 
-            const fStatusM    = byM(['Status','Estado']);
-            const fStatusCccM = byM(['Status_CCC','Status CCC','status_ccc']);
-            const fTipoM      = byM(['Change Type','Tipo de cambio']);
-            const fRiesgoM    = byM(['Risk','Riesgo']);
-            const fImpactoM   = byM(['Impact','Impacto']);
-            const fPlanM      = byM(['Implementation Plan','Plan de implementación']);
-            const fRollbackM  = byM(['RollBack Planning','Rollback Plan','Plan de reversa (rollback)']);
-            const fPruebasM   = byM(['Test Planning','Plan de pruebas']);
-            const fAprobM     = byM(['Approvers','Aprobadores requeridos']);
-            const fSolicM     = byM(['Solicitante','Solicitor','Applicant','Requester']);
+                        const projectIdMain = await findProjectV2Main();
+                        if (!projectIdMain) { console.log('Project principal no encontrado o sin permisos'); return }
+                        const itemIdMain = await ensureItem(projectIdMain);
+                        if (!itemIdMain) { console.log('No se pudo crear/encontrar item en Project principal'); return }
+                        const fieldsMain = await getFields(projectIdMain);
+                        const byM = (names)=> {
+                          const want = names.map(n => norm(n));
+                          return fieldsMain.find(f => {
+                            const fn = norm(f?.name);
+                            return want.some(w => fn === w || fn.includes(w));
+                          });
+                        };
 
-            if (context.payload.action === 'opened') {
-              await github.rest.issues.update({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issue.number,
-                state: 'open',
-              });
-              await setSelect(projectIdMain, itemIdMain, fStatusM, 'Backlog');
-              await setSelect(projectIdMain, itemIdMain, fStatusCccM, 'Inbox');
-            }
+                        const fStatusM    = byM(['Status','Estado']);
+                        const fStatusCccM = byM(['Status_CCC','Status CCC','status_ccc']);
+                        const fTipoM      = byM(['Change Type','Tipo de cambio']);
+                        const fRiesgoM    = byM(['Risk','Riesgo']);
+                        const fImpactoM   = byM(['Impact','Impacto']);
+                        const fPlanM      = byM(['Implementation Plan','Plan de implementación']);
+                        const fRollbackM  = byM(['RollBack Planning','Rollback Plan','Plan de reversa (rollback)']);
+                        const fPruebasM   = byM(['Test Planning','Plan de pruebas']);
+                        const fAprobM     = byM(['Approvers','Aprobadores requeridos']);
+                        const fSolicM     = byM(['Solicitante','Solicitor','Applicant','Requester']);
 
-            await setSelect(projectIdMain, itemIdMain, fTipoM,   tipo);
-            await setSelect(projectIdMain, itemIdMain, fRiesgoM, riesgo);
-            await setText  (projectIdMain, itemIdMain, fImpactoM?.id, grab('Impacto') || grab('Impact'));
-            await setText  (projectIdMain, itemIdMain, fPlanM?.id,    grab('Plan de implementación') || grab('Implementation Plan'));
-            await setText  (projectIdMain, itemIdMain, fRollbackM?.id,grab('Plan de reversa \\(rollback\\)') || grab('RollBack Planning') || grab('Rollback Plan'));
-            await setText  (projectIdMain, itemIdMain, fPruebasM?.id, grab('Plan de pruebas') || grab('Test Planning'));
-            await setText  (projectIdMain, itemIdMain, fAprobM?.id,   grab('Aprobadores requeridos') || grab('Approvers'));
-            await setText  (projectIdMain, itemIdMain, fSolicM?.id,   grab('Solicitante') || grab('Solicitor') || grab('Applicant') || grab('Requester'));
+                        if (context.payload.action === 'opened') {
+                          await github.rest.issues.update({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            issue_number: issue.number,
+                            state: 'open',
+                          });
+                          await setSelect(projectIdMain, itemIdMain, fStatusM, 'Backlog');
+                          await setSelect(projectIdMain, itemIdMain, fStatusCccM, 'Inbox');
+                        }
 
-            if (context.payload.action === 'opened' || context.payload.action === 'closed') {
-              log('✅ Formulario procesado y agregado al proyecto exitosamente');
+                        await setSelect(projectIdMain, itemIdMain, fTipoM,   tipo);
+                        await setSelect(projectIdMain, itemIdMain, fRiesgoM, riesgo);
+                        await setText  (projectIdMain, itemIdMain, fImpactoM?.id, grab('Impacto') || grab('Impact'));
+                        await setText  (projectIdMain, itemIdMain, fPlanM?.id,    grab('Plan de implementación') || grab('Implementation Plan'));
+                        await setText  (projectIdMain, itemIdMain, fRollbackM?.id,grab('Plan de reversa \\(rollback\\)') || grab('RollBack Planning') || grab('Rollback Plan'));
+                        await setText  (projectIdMain, itemIdMain, fPruebasM?.id, grab('Plan de pruebas') || grab('Test Planning'));
+                        await setText  (projectIdMain, itemIdMain, fAprobM?.id,   grab('Aprobadores requeridos') || grab('Approvers'));
+                        await setText  (projectIdMain, itemIdMain, fSolicM?.id,   grab('Solicitante') || grab('Solicitor') || grab('Applicant') || grab('Requester'));
 
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: issue.number,
-                body: `## 📋 Formulario Recibido y Procesado
+                        if (context.payload.action === 'opened') {
+                          log('✅ Formulario procesado y agregado al proyecto exitosamente');
 
-            El formulario ha sido agregado exitosamente al proyecto para revisión.
+                          await github.rest.issues.createComment({
+                            owner,
+                            repo,
+                            issue_number: issue.number,
+                            body: `## 📋 Formulario Recibido y Procesado
 
-            **Estado actual:** Cerrado como "No Planificado" (pendiente de aprobación)
+                        El formulario ha sido agregado exitosamente al proyecto para revisión.
 
-            **Próximos pasos:**
-            - El equipo CCC revisará la solicitud
-            - Para aprobar: Un miembro del equipo CCC agregará la etiqueta \`approved\` (la issue se reabrirá automáticamente)
-            - Para denegar: Se agregará la etiqueta \`denied\`
+                        **Estado actual:** Cerrado como "Not Planned" (pendiente de aprobación)
 
-            **Fecha de procesamiento:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
-                                        });
-                                      }
+                        **Próximos pasos:**
+                        - El equipo CCC revisará la solicitud
+                        - Para aprobar: Un miembro del equipo CCC agregará la etiqueta \`approved\` (la issue se reabrirá automáticamente)
+                        - Para denegar: Se agregará la etiqueta \`denied\`
 
-  # --- Job: process-user-approval (Solo para 'user') ---
-  process-user-approval:
-    if: |
-      github.event_name == 'issues' &&
-      github.event.action == 'labeled' &&
-      (github.event.label.name == 'approved' ||
-        github.event.label.name == 'Approved' ||
-        github.event.label.name == 'aprobado' ||
-        github.event.label.name == 'Aprobado') &&
-      contains(github.event.issue.labels.*.name, 'user')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/github-script@v7
-        id: check_fields
-        with:
-          github-token: ${{ secrets.PROJECTS_PAT }}
-          script: |
-            const issue = context.payload.issue;
-            const norm = (s) =>
-              (s ?? '')
-                .toString()
-                .normalize('NFD')
-                .replace(/\p{Diacritic}/gu, '')
-                .trim()
-                .toLowerCase();
+                        **Fecha de procesamiento:** ${new Date().toISOString().slice(0, 19).replace('T', ' ')}`
+                          });
+                        }
 
-            const actor = context.actor;
-            const ORG_LOGIN = process.env.ORG_LOGIN;
+              # --- Job: process-user-approval (Solo para 'user') ---
+              process-user-approval:
+                if: |
+                  github.event_name == 'issues' &&
+                  github.event.action == 'labeled' &&
+                  (github.event.label.name == 'approved' ||
+                    github.event.label.name == 'Approved' ||
+                    github.event.label.name == 'aprobado' ||
+                    github.event.label.name == 'Aprobado') &&
+                  contains(github.event.issue.labels.*.name, 'user')
+                runs-on: ubuntu-latest
+                steps:
+                  - uses: actions/github-script@v7
+                    id: check_fields
+                    with:
+                      github-token: ${{ secrets.PROJECTS_PAT }}
+                      script: |
+                        const issue = context.payload.issue;
+                        const norm = (s) =>
+                          (s ?? '')
+                            .toString()
+                            .normalize('NFD')
+                            .replace(/\p{Diacritic}/gu, '')
+                            .trim()
+                            .toLowerCase();
 
-            let isCccMember = false;
-            if (ORG_LOGIN) {
-              try {
-                await github.rest.teams.getMembershipForUserInOrg({
-                  org: ORG_LOGIN,
-                  team_slug: 'ccc',
-                  username: actor
-                });
-                isCccMember = true;
-              } catch (error) {
-                if (error.status === 404) {
-                  isCccMember = false;
-                } else {
-                  console.log(`Error al verificar membresía: ${error.message}`);
-                  isCccMember = false;
-                }
-              }
-            }
+                        const actor = context.actor;
+                        const ORG_LOGIN = process.env.ORG_LOGIN;
+
+                        let isCccMember = false;
+                        if (ORG_LOGIN) {
+                          try {
+                            await github.rest.teams.getMembershipForUserInOrg({
+                              org: ORG_LOGIN,
+                              team_slug: 'ccc',
+                              username: actor
+                            });
+                            isCccMember = true;
+                          } catch (error) {
+                            if (error.status === 404) {
+                              isCccMember = false;
+                            } else {
+                              console.log(`Error al verificar membresía: ${error.message}`);
+                              isCccMember = false;
+                            }
+                          }
+                        }
 
             if (!isCccMember) {
               console.log(`Usuario ${actor} no pertenece al equipo "ccc". Acceso denegado.`);
