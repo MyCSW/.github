@@ -2194,19 +2194,304 @@ jobs:
 
   # --- Job: process-ccc-commands ---
   process-ccc-commands:
-    if: github.event_name == 'issue_comment' && github.event.action == 'created'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Process Commands
-        uses: actions/github-script@v7
-        env:
-          USER_LOGIN: ${{ env.USER_LOGIN }}
-          ORG_LOGIN: ${{ env.ORG_LOGIN }}
-          PROJECT_NUMBER_USER: ${{ env.PROJECT_NUMBER_USER }}
-          PROJECT_NUMBER: ${{ env.PROJECT_NUMBER }}
-        with:
-          github-token: ${{ secrets.PROJECTS_PAT }}
-          script: .github/scripts/process-ccc-commands.js
+      if: github.event_name == 'issue_comment' && github.event.action == 'created'
+      runs-on: ubuntu-latest
+      steps:
+        - name: Process Commands
+          uses: actions/github-script@v7
+          with:
+            github-token: ${{ secrets.PROJECTS_PAT }}
+            script: |
+              const comment = context.payload.comment;
+              const issue = context.payload.issue;
+              const commentBody = (comment.body || '').trim();
+              const actor = context.actor;
+
+              const norm = (s) =>
+                (s ?? '')
+                  .toString()
+                  .normalize('NFD')
+                  .replace(/\p{Diacritic}/gu, '')
+                  .trim()
+                  .toLowerCase();
+
+              const hasUser = (issue.labels || []).some((l) => norm(l.name) === 'user');
+              if (!hasUser) {
+                console.log('Issue no tiene label "user". Saltando comandos CCC.');
+                return;
+              }
+
+              const USER_LOGIN = process.env.USER_LOGIN;
+              const ORG_LOGIN = process.env.ORG_LOGIN;
+              const PN_USER = parseInt(process.env.PROJECT_NUMBER_USER || '0', 10);
+
+              let isCccMember = false;
+              if (ORG_LOGIN) {
+                try {
+                  await github.rest.teams.getMembershipForUserInOrg({
+                    org: ORG_LOGIN,
+                    team_slug: 'ccc',
+                    username: actor
+                  });
+                  isCccMember = true;
+                } catch (error) {
+                  if (error.status === 404) {
+                    isCccMember = false;
+                  } else {
+                    console.log(`Error al verificar membresía: ${error.message}`);
+                    isCccMember = false;
+                  }
+                }
+              }
+
+              async function getUserProjByNum(n) {
+                const r = await github.graphql(
+                  `query($login:String!){
+                    user(login:$login){
+                      projectsV2(first:50){
+                        nodes{ id number }
+                      }
+                    }
+                  }`,
+                  { login: USER_LOGIN }
+                ).catch(() => null);
+                return r?.user?.projectsV2?.nodes?.find((x) => x.number === n)?.id || null;
+              }
+
+              async function findItemId(projectId, issueNumber) {
+                const r = await github.graphql(
+                  `query($projectId:ID!, $q:String!){
+                    node(id:$projectId){
+                      ... on ProjectV2 {
+                        items(first:50, query:$q){
+                          nodes{
+                            id
+                            content{ ... on Issue { number } }
+                          }
+                        }
+                      }
+                    }
+                  }`,
+                  { projectId, q: String(issueNumber) }
+                );
+                return r.node.items.nodes.find((n) => n.content?.number === issueNumber)?.id || null;
+              }
+
+              async function getFields(projectId) {
+                const r = await github.graphql(
+                  `query($projectId:ID!){
+                    node(id:$projectId){
+                      ... on ProjectV2 {
+                        fields(first:100){
+                          nodes{
+                            ... on ProjectV2FieldCommon { id name dataType }
+                            ... on ProjectV2SingleSelectField { id name options { id name } }
+                          }
+                        }
+                      }
+                    }
+                  }`,
+                  { projectId }
+                );
+                return r.node.fields.nodes;
+              }
+
+              async function getFieldValues(itemId) {
+                const r = await github.graphql(
+                  `query($itemId:ID!){
+                    node(id:$itemId){
+                      ... on ProjectV2Item {
+                        fieldValues(first:100){
+                          nodes{
+                            ... on ProjectV2ItemFieldTextValue {
+                              text
+                              field { ... on ProjectV2FieldCommon { id name } }
+                            }
+                            ... on ProjectV2ItemFieldDateValue {
+                              date
+                              field { ... on ProjectV2FieldCommon { id name } }
+                            }
+                            ... on ProjectV2ItemFieldSingleSelectValue {
+                              name
+                              optionId
+                              field { ... on ProjectV2FieldCommon { id name } }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }`,
+                  { itemId }
+                );
+                return r.node.fieldValues.nodes;
+              }
+
+              const by = (fields, names) =>
+                names.map((n) => fields.find((f) => norm(f?.name) === norm(n))).find(Boolean);
+
+              if (commentBody === '/verificar') {
+                if (!isCccMember) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `@${actor} No tienes permisos para ejecutar este comando. Solo miembros del equipo CCC.`
+                  });
+                  return;
+                }
+
+                const projectId = await getUserProjByNum(PN_USER);
+                if (!projectId) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: '❌ No se pudo encontrar el proyecto de usuario.'
+                  });
+                  return;
+                }
+
+                const itemId = await findItemId(projectId, issue.number);
+                if (!itemId) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: '❌ Este issue no está en el proyecto.'
+                  });
+                  return;
+                }
+
+                const fields = await getFields(projectId);
+                const fChangeType = by(fields, ['Change Type', 'Tipo de cambio']);
+                const fImpact = by(fields, ['Impact']);
+                const fPlan = by(fields, ['Implementation Plan']);
+                const fRollback = by(fields, ['RollBack Planning', 'Rollback Plan']);
+                const fPruebas = by(fields, ['Test Planning']);
+                const fAprob = by(fields, ['Approvers']);
+                const fStart = by(fields, ['Start date']);
+                const fTarget = by(fields, ['Target date']);
+
+                const values = await getFieldValues(itemId);
+                function getValue(field) {
+                  if (!field) return null;
+                  const v = values.find((n) => norm(n.field?.name) === norm(field.name));
+                  if (!v) return null;
+                  if ('text' in v) return (v.text || '').trim();
+                  if ('date' in v) return (v.date || '').trim();
+                  if ('name' in v) return (v.name || '').trim();
+                  return null;
+                }
+
+                const missing = [];
+                if (!getValue(fChangeType)) missing.push('Change Type');
+                if (!getValue(fImpact)) missing.push('Impact');
+                if (!getValue(fPlan)) missing.push('Implementation Plan');
+                if (!getValue(fRollback)) missing.push('RollBack Planning');
+                if (!getValue(fPruebas)) missing.push('Test Planning');
+                if (!getValue(fAprob)) missing.push('Approvers');
+                if (!getValue(fStart)) missing.push('Start date');
+                if (!getValue(fTarget)) missing.push('Target date');
+
+                if (missing.length > 0) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `## ❌ Campos aún incompletos
+
+              Faltan los siguientes campos en el proyecto:
+              ${missing.map((m) => `- \`${m}\``).join('\n')}
+
+              Por favor, completa estos campos en el proyecto y vuelve a ejecutar \`/verificar\`.`
+                  });
+                } else {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `## ✅ Verificación Exitosa
+
+              Todos los campos requeridos están completos. Ahora puedes agregar la etiqueta \`approved\` para aprobar el cambio.`
+                  });
+                }
+                return;
+              }
+
+              if (commentBody === '/ayuda') {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `## 📖 Ayuda - Formulario CCC
+
+              ### Comandos disponibles:
+              - \`/verificar\` - Verifica si todos los campos están completos en el proyecto
+              - \`/actualizar\` - Actualiza el proyecto con información de este issue
+              - \`/ayuda\` - Muestra esta ayuda
+
+              ### Guía de campos requeridos:
+
+              **Change Type**: Tipo de cambio
+              - \`estandar\`: Cambio pre-aprobado, bajo riesgo
+              - \`normal\`: Cambio que requiere evaluación estándar
+              - \`emergencia\`: Cambio urgente para resolver un incidente
+
+              **Impact**: Describe el impacto del cambio
+              - Usuarios afectados
+              - Sistemas impactados
+              - Nivel de criticidad
+
+              **Implementation Plan**: Pasos detallados para implementar
+              - Lista numerada de pasos
+              - Recursos necesarios
+              - Tiempo estimado
+
+              **RollBack Planning**: Plan de reversión
+              - Procedimiento paso a paso para revertir
+              - Tiempo estimado de rollback
+              - Indicar si es completamente reversible
+
+              **Test Planning**: Estrategia de pruebas
+              - Tipos de tests a ejecutar
+              - Casos de prueba críticos
+              - Criterios de aceptación
+
+              **Approvers**: Personas que deben aprobar
+              - Lista de @usuarios requeridos
+              - Tech Lead, Product Owner, DevOps, etc.
+
+              **Start date**: Fecha de inicio (formato: YYYY-MM-DD)
+              **Target date**: Fecha objetivo (formato: YYYY-MM-DD)`
+                });
+                return;
+              }
+
+              if (commentBody === '/actualizar') {
+                if (!isCccMember) {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: issue.number,
+                    body: `@${actor} No tienes permisos para ejecutar este comando. Solo miembros del equipo CCC.`
+                  });
+                  return;
+                }
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `## 🔄 Actualización del Proyecto
+
+              El comando \`/actualizar\` permite sincronizar información desde este issue hacia el proyecto.
+
+              **Próximamente disponible**: Esta funcionalidad está en desarrollo.
+
+              Por ahora, por favor actualiza los campos manualmente en el proyecto y usa \`/verificar\` para confirmar.`
+                });
+                return;
+              }
 
   
 
