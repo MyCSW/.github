@@ -1,4 +1,4 @@
-name: RFC Controlle
+name: RFC Controller
 
 on:
   issues:
