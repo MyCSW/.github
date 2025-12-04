@@ -1102,9 +1102,24 @@ jobs:
                               return true;
                             }
                             
-                            const projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
-                            if (!projectId) {
-                              console.log('Proyecto principal no encontrado.');
+                            async function getOrgProjByNum(n){
+                              if(!ORG_LOGIN) return null;
+                              const r = await github.graphql(
+                                `query($login:String!){
+                                  organization(login:$login){
+                                    projectsV2(first:50){
+                                      nodes{ id number }
+                                    }
+                                  }
+                                }`,
+                                { login: ORG_LOGIN }
+                              ).catch(()=>null);
+                              return r?.organization?.projectsV2?.nodes?.find(x=>x.number===n)?.id || null;
+                            }
+
+                            const projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
+                            if(!projectId) {
+                              console.log('Proyecto de usuario no encontrado.');
                               return;
                             }
                             
@@ -1297,9 +1312,9 @@ jobs:
 
                 let projectId = null;
                 if (hasUser) {
-                projectId = await getUserProjByNum(PN_USER);
+                  projectId = await getOrgProjByNum(PN_USER) || await getUserProjByNum(PN_USER);
                 } else {
-                projectId = await getUserProjByNum(PN_MAIN) || await getOrgProjByNum(PN_MAIN);
+                  projectId = await getOrgProjByNum(PN_MAIN) || await getUserProjByNum(PN_MAIN);
                 }
 
                 if (!projectId) {
