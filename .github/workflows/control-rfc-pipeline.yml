@@ -76,6 +76,15 @@ jobs:
               return '';
             };
 
+            // Logging helper with timestamp and prefix
+            const log = (msg, data = null) => {
+              const timestamp = new Date().toISOString();
+              console.log(`[${timestamp}] [rfc-project] ${msg}`);
+              if (data) {
+                console.log(JSON.stringify(data, null, 2));
+              }
+            };
+
             const tipo   = (grab('Tipo de cambio') || '').toLowerCase();
             const riesgo = (grab('Riesgo') || '').toLowerCase();
 
@@ -358,30 +367,92 @@ jobs:
             }
 
             async function ensureItem(projectId){
-              const srch = await github.graphql(
-                `query($projectId:ID!, $q:String!){
-                  node(id:$projectId){ ... on ProjectV2 {
-                    items(first:50, query:$q){
-                      nodes{
-                        id
-                        content{ ... on Issue { number } }
+              log(`🔍 Starting ensureItem for issue #${issue.number}`, {
+                projectId,
+                issueId,
+                issueNumber: issue.number,
+                issueTitle: issue.title
+              });
+
+              // Validation checks
+              if (!projectId) {
+                log('❌ ERROR: projectId is null or undefined');
+                throw new Error('projectId is required but was not provided');
+              }
+              if (!issueId) {
+                log('❌ ERROR: issueId is null or undefined');
+                throw new Error('issueId is required but was not provided');
+              }
+
+              log('Checking if item already exists in project...');
+
+              // Check if item already exists (increased to 100 items)
+              try {
+                const srch = await github.graphql(
+                  `query($projectId:ID!, $q:String!){
+                    node(id:$projectId){ ... on ProjectV2 {
+                      items(first:100, query:$q){
+                        nodes{
+                          id
+                          content{ ... on Issue { number } }
+                        }
                       }
+                    } }
+                  }`,
+                  { projectId, q: String(issue.number) }
+                );
+
+                let it = srch?.node?.items?.nodes?.find(n=>n.content?.number===issue.number);
+                if (it) {
+                  log(`✅ Item already exists in project with ID: ${it.id}`);
+                  return it.id;
+                }
+
+                log('➕ Item not found in project. Adding new item...');
+
+                // Add item to project - WITH PROPER ERROR HANDLING
+                const add = await github.graphql(
+                  `mutation($projectId:ID!, $contentId:ID!){
+                    addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){
+                      item { id }
                     }
-                  } }
-                }`,
-                { projectId, q: String(issue.number) }
-              );
-              let it = srch?.node?.items?.nodes?.find(n=>n.content?.number===issue.number);
-              if (it) return it.id;
-              const add = await github.graphql(
-                `mutation($projectId:ID!, $contentId:ID!){
-                  addProjectV2ItemById(input:{projectId:$projectId, contentId:$contentId}){
-                    item { id }
-                  }
-                }`,
-                { projectId, contentId: issueId }
-              ).catch(()=>null);
-              return add?.addProjectV2ItemById?.item?.id || null;
+                  }`,
+                  { projectId, contentId: issueId }
+                );
+
+                const itemId = add?.addProjectV2ItemById?.item?.id;
+                if (itemId) {
+                  log(`✅ SUCCESS: Item added to project with ID: ${itemId}`);
+                  return itemId;
+                } else {
+                  log('❌ Respuesta de addProjectV2ItemById no contiene item.id');
+                  return null;
+                }
+
+              } catch(error) {
+                // CRITICAL: Log detailed error information
+                log('❌ CRITICAL ERROR in ensureItem:', {
+                  issueNumber: issue.number,
+                  issueTitle: issue.title,
+                  projectId,
+                  issueId,
+                  errorMessage: error.message,
+                  errorStatus: error.status,
+                  errorType: error.constructor.name,
+                  errorResponse: error.response?.data,
+                  graphqlErrors: error.errors
+                });
+
+                // Check for common permission errors
+                if (error.message.includes('Resource not accessible by integration') ||
+                    error.message.includes('Must have write access')) {
+                  log('⚠️ PERMISSIONS ERROR: El PAT necesita scope "project" con write access');
+                  log('⚠️ Verifica que el token tenga permisos en: https://github.com/settings/tokens');
+                }
+
+                // Re-throw to make the workflow fail visibly
+                throw new Error(`Failed to add issue #${issue.number} to project: ${error.message}`);
+              }
             }
 
             async function getFields(projectId){
