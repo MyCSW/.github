@@ -123,8 +123,6 @@ jobs:
             const PROJECT_TITLE_USER   = (process.env.PROJECT_TITLE_USER || '').trim();
             const PROJECT_URL          = (process.env.PROJECT_URL || '').trim();
 
-            const log = (msg) => console.log(`[rfc-project] ${msg}`);
-
             // DEBUG: Mostrar configuración
             log(`📋 Configuración detectada:`);
             log(`  ORG_LOGIN: ${ORG_LOGIN || 'NO CONFIGURADO'}`);
