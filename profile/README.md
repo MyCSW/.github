@@ -27,36 +27,6 @@ El objetivo principal es **construir aplicaciones reales que aporten valor al en
 
 ---
 
-## 🗂️ Jerarquía del Equipo
-
-```
-                    ┌──────────────────────────────┐
-                    │            MyCSW             │
-                    │  Comité de Revisión Técnica  │
-                    │           (CRT)              │
-                    └──────────────┬───────────────┘
-                                   │
-                  ┌────────────────┴─────────────────┐
-                  │                                   │
-        ┌─────────▼──────────┐           ┌───────────▼────────┐
-        │    Área Backend    │           │   Área Frontend    │
-        │  [MyCS_BackEnd]    │           │  [MyCS_FrontEnd]   │
-        └─────────┬──────────┘           └───────────┬────────┘
-                  │                                   │
-        ┌─────────▼──────────┐           ┌───────────▼────────┐
-        │  Anthony Punina    │           │   Xabier Perez     │
-        │  Líder Backend     │           │  Líder Frontend    │
-        │  Reviewer PRs      │           │  Reviewer PRs      │
-        └─────────┬──────────┘           └───────────┬────────┘
-                  │                                   │
-        ┌─────────▼──────────┐           ┌───────────▼────────┐
-        │   Erick Guerron    │           │ Maria Belen Zapata │
-        │  Dev. Backend      │           │  Dev. Frontend     │
-        └────────────────────┘           └────────────────────┘
-```
-
----
-
 ## 🧠 Proyecto Actual — Interacción Humano Computador (IHC)
 
 El proyecto actual se enmarca dentro del área de **Interacción Humano Computador (IHC)**, enfocado en el diseño y desarrollo de interfaces que sean **intuitivas, accesibles y centradas en el usuario** dentro del contexto educativo de la FISEI.
