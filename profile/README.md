@@ -1,49 +1,40 @@
+
 # 🏛️ MyCSW – My Configuration Software Workspace
 
-**Organización Académica | Universidad Técnica de Ambato – FISEI**  
-**Carrera:** Ingeniería en Software  
-**Materia:** Manejo y Configuración de Software  
+**Organización Académica | Universidad Técnica de Ambato – FISEI**
+**Carrera:** Ingeniería en Software
+**Área:** Desarrollo de Software Educativo
 
 ---
 
 ## 🎯 Propósito de la Organización
 
-**MyCSW** es una organización conformada por seis estudiantes de la **Universidad Técnica de Ambato** creada con el propósito de **fortalecer las competencias en gestión de la configuración del software**, aplicando **buenas prácticas de control de versiones, control de cambios y desarrollo colaborativo**.
+**MyCSW** es una organización conformada por cuatro estudiantes de la **Universidad Técnica de Ambato** orientada al **desarrollo de soluciones de software con impacto educativo**, aplicando buenas prácticas de ingeniería, control de versiones y trabajo colaborativo en equipo.
 
-El objetivo principal es **simular un entorno empresarial real** donde se desarrolle una aplicación completa, integrando herramientas modernas de gestión como **GitHub** (control de versiones) y **Jira Service Management** (gestión de cambios).
+El objetivo principal es **construir aplicaciones reales que aporten valor al entorno académico**, integrando herramientas modernas de desarrollo como **GitHub** y siguiendo estándares profesionales del ciclo de vida del software.
 
 ---
 
 ## 👥 Integrantes del Equipo
 
-El equipo **MyCSW** está conformado por **6 integrantes** de la carrera de Ingeniería en Software, organizados en dos áreas principales: **Backend** y **Frontend**, cada una liderada por un responsable técnico que guía el desarrollo y asegura la calidad del módulo correspondiente.
-
 | Área | Rol | Nombre | Responsabilidades principales |
 |------|------|---------|-------------------------------|
 | 🧩 Backend | 🧑‍💻 Líder Backend | *Anthony Punina* | Coordinación del equipo backend, definición de arquitectura del servidor, revisión de commits y merges técnicos. |
 | 🧩 Backend | 👨‍💻 Desarrollador Backend | *Erick Guerron* | Implementación de controladores REST, servicios y lógica de negocio. |
-| 🧩 Backend | 👨‍💻 Desarrollador Backend | *Mateo Auz* | Integración con base de datos, pruebas unitarias y optimización de endpoints. |
 | 🎨 Frontend | 👩‍💻 Líder Frontend | *Maria Belen Zapata* | Coordinación del equipo frontend, definición de estructura visual y estándares de interfaz. |
 | 🎨 Frontend | 👩‍💻 Desarrollador Frontend | *Xabier Perez* | Desarrollo de componentes dinámicos, consumo de API REST y manejo de estado. |
-| 🎨 Frontend | 👩‍💻 Desarrollador Frontend | *Santiago Mora* | Diseño responsivo, validaciones de formularios y mejora de experiencia de usuario (UX/UI). |
 
-> 🧠 *El grupo también conforma un **Comité de Control de Cambios (CCB)**, encargado de revisar, aprobar y auditar las solicitudes de cambio, asegurando la trazabilidad y estabilidad del proyecto.*
-
+> 🧠 *El grupo también conforma un **Comité de Revisión Técnica (CRT)**, encargado de revisar, aprobar y auditar los cambios del proyecto, asegurando la calidad y estabilidad del software.*
 
 ---
 
 ## 🧠 Proyecto Actual
 
-### **Sistema de Gestión de Cursos y Eventos Académicos (SGCEA)**
+### **Interacción Humano Computador**
 
-El proyecto consiste en el desarrollo de una **aplicación web** que permita **administrar eventos académicos** dentro de la Facultad de Ingeniería en Sistemas, Electrónica e Industrial (FISEI).  
+El proyecto actual se enmarca dentro del área de **Interacción Humano Computador (IHC)**, enfocado en el diseño y desarrollo de interfaces que sean **intuitivas, accesibles y centradas en el usuario** dentro del contexto educativo de la FISEI.
 
-El sistema gestionará:
-- CRUD de cursos/eventos, organizadores y participantes.  
-- Roles diferenciados (administrador, usuario, organizador).  
-- Inscripciones, pagos y comprobantes.  
-- Generación de reportes (asistencia, notas, certificados).  
-- Validación de requisitos previos según tipo de evento.  
+El equipo trabaja en: diseño de interfaces orientadas a la experiencia del usuario (UX/UI); evaluación de usabilidad mediante pruebas con usuarios reales; prototipado y validación de flujos de interacción; aplicación de principios de accesibilidad y diseño inclusivo; e implementación de soluciones que reduzcan la carga cognitiva del usuario final.
 
 ---
 
@@ -52,47 +43,50 @@ El sistema gestionará:
 | Categoría | Herramienta / Tecnología |
 |------------|--------------------------|
 | Control de versiones | **Git**, **GitHub** |
-| Gestión de cambios | **Sin definir** |
-| Lenguaje de desarrollo | TypeScrip |
-| Base de datos | MySQL |
-| Frameworks utilizados | React Frontend y Nest.js Backend |
-| Metodología de control de versiones | **GitFlow Workflow** |
+| Lenguaje de desarrollo | **TypeScript** |
+| Base de datos | **MySQL** |
+| Framework Frontend | **React** |
+| Framework Backend | **NestJS** |
+| Metodología de versiones | **GitFlow Workflow** |
 | Comunicación y seguimiento | Issues, Commits y Pull Requests |
 
 ---
 
 ## 🔄 Flujo de Trabajo
 
-1. Cada integrante mantiene una copia local del repositorio.  
-2. Se crean ramas por característica o corrección (`feature/`, `fix/`, `hotfix/`).  
-3. Los cambios se registran con commits descriptivos y se revisan mediante Pull Requests.  
+1. Cada integrante mantiene una copia local del repositorio.
+2. Se crean ramas por característica o corrección (`feature/`, `fix/`, `hotfix/`).
+3. Los cambios se registran con commits descriptivos y se revisan mediante Pull Requests.
+4. El CRT revisa y aprueba los cambios antes de integrarlos a `main`.
 
 ---
 
 ## 📋 Resultados Esperados
 
-- Aplicación funcional con evidencia de trabajo colaborativo.  
-- Documentación técnica y de control de versiones completa.  
-- Demostración en presentación grupal (20-30 minutos).  
-- Simulación completa del proceso de control de configuración y cambios.  
+- Interfaces funcionales y usables con evidencia de evaluación centrada en el usuario.
+- Documentación técnica de diseño de interacción completa.
+- Demostración en presentación grupal (20–30 minutos).
+- Software de calidad con impacto directo en la comunidad universitaria.
 
 ---
 
 ## 🧾 Licencia
 
-Este proyecto se desarrolla con fines **académicos** bajo la supervisión de la **Universidad Técnica de Ambato**.  
-Uso permitido únicamente para **fines educativos y de evaluación** dentro de la asignatura **Manejo y Configuración de Software**.
+Este proyecto se desarrolla con fines **educativos** bajo la supervisión de la **Universidad Técnica de Ambato** — 2026.
+Uso permitido únicamente para **fines académicos y de evaluación** dentro de la carrera de **Ingeniería en Software**.
 
 ---
 
 ## 📫 Contacto
 
-**MyCSW – My Configuration Software Workspace**  
-📍 Facultad de Ingeniería en Sistemas, Electrónica e Industrial – UTA  
-✉️ Contacto del equipo: *mycsw.uta@gmail.com*  
+**MyCSW – My Configuration Software Workspace**
+📍 Facultad de Ingeniería en Sistemas, Electrónica e Industrial – UTA
+✉️ Contacto del equipo: *mycsw.uta@gmail.com*
 🌐 Repositorio oficial: [github.com/MyCSW](https://github.com/MyCSW)
 
 ---
 
-> _“El verdadero aprendizaje surge de la colaboración, la práctica y la mejora continua.”_  
+> _"El verdadero aprendizero aprendizaje surge de la colaboración, la práctica y la mejora continua."_
 > — Equipo **MyCSW**
+
+---
